@@ -77,6 +77,12 @@ struct SettingsView: View {
                 Section("Overlay & controller") {
                     Toggle("Show stream stats", isOn: $store.settings.showStats)
                     Toggle("Controller rumble", isOn: $store.settings.rumble)
+                    if store.settings.rumble {
+                        HStack {
+                            Text("Vibration strength")
+                            Slider(value: $store.settings.rumbleStrength, in: 0.2...1)
+                        }
+                    }
                     Toggle("DualSense lightbar", isOn: $store.settings.lightbar)
                     Toggle("Motion controls (gyro)", isOn: $store.settings.motion)
                     if store.settings.motion {

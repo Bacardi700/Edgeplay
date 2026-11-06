@@ -14,7 +14,6 @@ final class ControllerInput {
     private var controller: GCController?
     private var observers: [NSObjectProtocol] = []
     private var hapticEngine: CHHapticEngine?
-    private var hapticPlayer: CHHapticPatternPlayer?
     private var homeDownAt: TimeInterval?
     private var menuFiredForPress = false
     private var psPulseUntil: TimeInterval = 0
@@ -167,9 +166,11 @@ final class ControllerInput {
 
     /// Stops rumbling once the console stops sending haptics.
     private func decayRumble() {
-        if hapticPlayer != nil, ProcessInfo.processInfo.systemUptime - lastRumbleAt > 0.15 {
-            try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)
-            hapticPlayer = nil
+        if sidePlayers.contains(where: { $0 != nil }), ProcessInfo.processInfo.systemUptime - lastRumbleAt > 0.15 {
+            for i in sidePlayers.indices {
+                try? sidePlayers[i]?.stop(atTime: CHHapticTimeImmediate)
+                sidePlayers[i] = nil
+            }
         }
     }
 
@@ -216,7 +217,10 @@ final class ControllerInput {
     private func setupHaptics() {
         hapticEngine?.stop()
         hapticEngine = nil
-        hapticPlayer = nil
+        sideEngines?.0.stop()
+        sideEngines?.1.stop()
+        sideEngines = nil
+        sidePlayers = [nil, nil]
         let engine: CHHapticEngine?
         if let pad = controller?.haptics?.createEngine(withLocality: .default) {
             engine = pad
@@ -235,37 +239,66 @@ final class ControllerInput {
         engine.stoppedHandler = { [weak self] _ in self?.engineRunning = false }
         engineRunning = (try? engine.start()) != nil
         hapticEngine = engine
+
+        sideEngines = nil
+        if let h = controller?.haptics,
+           h.supportedLocalities.contains(.leftHandle), h.supportedLocalities.contains(.rightHandle),
+           let le = h.createEngine(withLocality: .leftHandle),
+           let re = h.createEngine(withLocality: .rightHandle) {
+            for e in [le, re] {
+                e.isAutoShutdownEnabled = false
+                e.playsHapticsOnly = true
+                e.resetHandler = { [weak e] in try? e?.start() }
+                try? e.start()
+            }
+            sideEngines = (le, re)
+        }
     }
 
     /// Last rumble strengths received from the console (0-255), for the stats overlay.
     private(set) var lastRumble: (UInt8, UInt8) = (0, 0)
     private var engineRunning = false
+    /// Separate engines for the left and right grip when the controller supports it,
+    /// so a hit on the left is felt on the left.
+    private var sideEngines: (CHHapticEngine, CHHapticEngine)?
+    private var sidePlayers: [CHHapticPatternPlayer?] = [nil, nil]
 
     /// Plays rumble as short overlapping pulses. Simple continuous events are supported by
     /// every controller haptics engine on iOS (dynamic parameter control isn't always).
-    func rumble(left: UInt8, right: UInt8) {
+    func rumble(left: UInt8, right: UInt8, sharpLeft: Float? = nil, sharpRight: Float? = nil, strength scale: Float = 0.7) {
         lastRumble = (left, right)
         if hapticEngine == nil || !engineRunning { setupHaptics() }
-        guard let engine = hapticEngine else { return }
         lastRumbleAt = ProcessInfo.processInfo.systemUptime
-        let strength = Float(max(left, right)) / 255
-        if strength <= 0.02 {
-            try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)
-            hapticPlayer = nil
+        let k = max(0.1, min(scale, 1))
+
+        if let engines = sideEngines {
+            let (le, re) = engines
+            // HD haptics channels are the two sides of the controller.
+            pulse(on: le, slot: 0, strength: Float(left) / 255 * k, sharpness: sharpLeft ?? 0.45)
+            pulse(on: re, slot: 1, strength: Float(right) / 255 * k, sharpness: sharpRight ?? 0.45)
             return
         }
-        // Low-frequency (left) motor feels better with low sharpness.
-        let sharpness: Float = right > left ? 0.7 : 0.25
+        guard let engine = hapticEngine else { return }
+        let s = Float(max(left, right)) / 255 * k
+        let sharp = max(sharpLeft ?? 0.45, sharpRight ?? 0.45)
+        pulse(on: engine, slot: 0, strength: s, sharpness: sharp)
+    }
+
+    private func pulse(on engine: CHHapticEngine, slot: Int, strength: Float, sharpness: Float) {
+        if strength <= 0.02 {
+            try? sidePlayers[slot]?.stop(atTime: CHHapticTimeImmediate)
+            sidePlayers[slot] = nil
+            return
+        }
         let event = CHHapticEvent(eventType: .hapticContinuous, parameters: [
-            CHHapticEventParameter(parameterID: .hapticIntensity, value: min(1, strength * 1.2)),
-            CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness),
+            CHHapticEventParameter(parameterID: .hapticIntensity, value: min(1, strength)),
+            CHHapticEventParameter(parameterID: .hapticSharpness, value: max(0, min(1, sharpness))),
         ], relativeTime: 0, duration: 0.12)
         do {
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            let player = try engine.makePlayer(with: pattern)
-            try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)
+            let player = try engine.makePlayer(with: CHHapticPattern(events: [event], parameters: []))
+            try? sidePlayers[slot]?.stop(atTime: CHHapticTimeImmediate)
             try player.start(atTime: CHHapticTimeImmediate)
-            hapticPlayer = player
+            sidePlayers[slot] = player
         } catch {
             engineRunning = false   // engine was stopped (e.g. backgrounded); rebuild next time
         }

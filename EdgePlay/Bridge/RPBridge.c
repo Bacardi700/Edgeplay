@@ -151,20 +151,35 @@ static void haptics_frame_cb(uint8_t *buf, size_t buf_size, void *user)
         return;
     size_t n = buf_size / 4;
     uint32_t suml = 0, sumr = 0;
+    int zcl = 0, zcr = 0;
+    int16_t pl = 0, pr = 0;
     for (size_t i = 0; i < n; i++) {
         int16_t l, r;
         memcpy(&l, buf + i * 4, 2);
         memcpy(&r, buf + i * 4 + 2, 2);
         suml += (uint32_t)abs(l) * 2;
         sumr += (uint32_t)abs(r) * 2;
+        if (i > 0) {
+            if ((l >= 0) != (pl >= 0)) zcl++;
+            if ((r >= 0) != (pr >= 0)) zcr++;
+        }
+        pl = l; pr = r;
     }
     uint32_t avl = suml / n, avr = sumr / n;
     if (avl < 100) avl = 0;      // same noise floor as chiaki-ng
     if (avr < 100) avr = 0;
-    // Envelope is small compared to full scale; boost so real effects are felt.
-    uint32_t L = avl * 4 > 65535 ? 65535 : avl * 4;
-    uint32_t R = avr * 4 > 65535 ? 65535 : avr * 4;
+    uint32_t L = avl * 3 > 65535 ? 65535 : avl * 3;
+    uint32_t R = avr * 3 > 65535 ? 65535 : avr * 3;
     uint8_t l8 = (uint8_t)(L >> 8), r8 = (uint8_t)(R >> 8);
+
+    // Pitch from zero crossings: the haptics stream runs at ~3 kHz, so in this frame
+    // freq ~= crossings / 2 * (3000 / n). Map ~40 Hz .. ~320 Hz to sharpness 0..15.
+    float fl = (float)zcl * 1500.0f / (float)n, fr = (float)zcr * 1500.0f / (float)n;
+    int shl = (int)((fl - 40.0f) / 280.0f * 15.0f + 0.5f);
+    int shr = (int)((fr - 40.0f) / 280.0f * 15.0f + 0.5f);
+    shl = shl < 0 ? 0 : (shl > 15 ? 15 : shl);
+    shr = shr < 0 ? 0 : (shr > 15 ? 15 : shr);
+
     uint64_t now = chiaki_time_now_monotonic_ms();
     int dl = (int)l8 - s->last_rumble_l, dr = (int)r8 - s->last_rumble_r;
     bool big_change = dl > 6 || dl < -6 || dr > 6 || dr < -6 || ((l8 | r8) == 0) != ((s->last_rumble_l | s->last_rumble_r) == 0);
@@ -175,8 +190,9 @@ static void haptics_frame_cb(uint8_t *buf, size_t buf_size, void *user)
     s->last_rumble_l = l8;
     s->last_rumble_r = r8;
     s->last_rumble_ms = now;
-    // left = low-frequency motor, right = high-frequency motor
-    s->cb.on_event(s->ctx, RP_EVENT_RUMBLE, ((int32_t)l8 << 8) | r8, false, NULL);
+    // code: [sharpL:4][sharpR:4][left:8][right:8], left/right = controller sides
+    int32_t code = (shl << 20) | (shr << 16) | ((int32_t)l8 << 8) | r8;
+    s->cb.on_event(s->ctx, RP_EVENT_RUMBLE, code, true, NULL);
 }
 
 RPSession *rp_session_create(const RPConnectConfig *cfg, RPCallbacks callbacks, void *ctx, const char **err_out)

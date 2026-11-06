@@ -146,8 +146,10 @@ final class StreamViewController: UIViewController {
                 askForPin(wrong: wrong)
             case .nickname:
                 break
-            case .rumble(let l, let r):
-                if settings.rumble { input.rumble(left: l, right: r) }
+            case .rumble(let l, let r, let sl, let sr):
+                if settings.rumble {
+                    input.rumble(left: l, right: r, sharpLeft: sl, sharpRight: sr, strength: Float(settings.rumbleStrength))
+                }
             case .triggers(let l, let r):
                 if settings.adaptiveTriggers {
                     input.setTriggers(left: l, right: r, scale: Float(settings.triggerStrength))

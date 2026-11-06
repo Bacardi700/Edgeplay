@@ -98,6 +98,8 @@ struct StreamSettings: Codable, Equatable {
     var custom = CustomFrame()
     var showStats: Bool = true
     var rumble: Bool = true
+    /// 0.2...1 multiplier for vibration.
+    var rumbleStrength: Double = 0.7
     var lightbar: Bool = true
     var adaptiveTriggers: Bool = true
     /// 0...1 multiplier for trigger resistance/vibration.
@@ -134,6 +136,7 @@ struct StreamSettings: Codable, Equatable {
         custom = v(.custom, d.custom)
         showStats = v(.showStats, d.showStats)
         rumble = v(.rumble, d.rumble)
+        rumbleStrength = v(.rumbleStrength, d.rumbleStrength)
         lightbar = v(.lightbar, d.lightbar)
         adaptiveTriggers = v(.adaptiveTriggers, d.adaptiveTriggers)
         triggerStrength = v(.triggerStrength, d.triggerStrength)

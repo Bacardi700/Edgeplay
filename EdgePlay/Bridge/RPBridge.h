@@ -48,7 +48,7 @@ typedef enum {
     RP_EVENT_QUIT = 1,             // code = chiaki quit reason, text = reason string, flag = is_error
     RP_EVENT_LOGIN_PIN_REQUEST = 2,// flag = previous pin was incorrect
     RP_EVENT_NICKNAME = 3,         // text = console nickname
-    RP_EVENT_RUMBLE = 4,           // code = (left << 8) | right
+    RP_EVENT_RUMBLE = 4,           // code = (left << 8) | right; flag = from HD haptics (then bits 16-23 = sharpness R/L nibbles)
     RP_EVENT_LED_COLOR = 5         // code = 0xRRGGBB
 } RPEventType;
 

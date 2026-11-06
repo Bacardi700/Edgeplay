@@ -11,7 +11,8 @@ final class StreamSession {
         case connected
         case pinRequested(previousWasWrong: Bool)
         case nickname(String)
-        case rumble(left: UInt8, right: UInt8)
+        /// Strength per controller side (0-255) and, for HD haptics, sharpness per side (0...1).
+        case rumble(left: UInt8, right: UInt8, sharpLeft: Float?, sharpRight: Float?)
         case lightbar(red: UInt8, green: UInt8, blue: UInt8)
         case triggers(left: TriggerEffect, right: TriggerEffect)
         case ended(reason: String, isError: Bool)
@@ -213,7 +214,9 @@ final class StreamSession {
         case RP_EVENT_NICKNAME:
             event = .nickname(text ?? "")
         case RP_EVENT_RUMBLE:
-            event = .rumble(left: UInt8((code >> 8) & 0xFF), right: UInt8(code & 0xFF))
+            event = .rumble(left: UInt8((code >> 8) & 0xFF), right: UInt8(code & 0xFF),
+                            sharpLeft: flag ? Float((code >> 20) & 0xF) / 15 : nil,
+                            sharpRight: flag ? Float((code >> 16) & 0xF) / 15 : nil)
         case RP_EVENT_LED_COLOR:
             event = .lightbar(red: UInt8((code >> 16) & 0xFF), green: UInt8((code >> 8) & 0xFF), blue: UInt8(code & 0xFF))
         case RP_EVENT_QUIT:
