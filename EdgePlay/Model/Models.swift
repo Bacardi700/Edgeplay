@@ -48,17 +48,67 @@ enum ScreenMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum EnhanceLevel: String, Codable, CaseIterable, Identifiable {
+    case off = "Off", balanced = "Balanced", sharp = "Sharp"
+    var id: String { rawValue }
+    /// Contrast-adaptive sharpening amount for the final pass.
+    var sharpness: Float {
+        switch self {
+        case .off: return 0
+        case .balanced: return 0.35
+        case .sharp: return 0.7
+        }
+    }
+}
+
 struct StreamSettings: Codable, Equatable {
+    /// Pick resolution/bitrate per connection (home Wi-Fi, away, mobile data).
+    var autoQuality: Bool = true
     var resolution: VideoResolution = .p1080
     var fps: UInt32 = 60
     var bitrateKbps: UInt32 = 15_000
     var codec: VideoCodec = .hevc
+    /// PS5 only; needs HEVC and an HDR-capable iPhone screen.
+    var hdr: Bool = false
+    var enhance: EnhanceLevel = .balanced
+    /// Present frames on a 120 Hz display link on ProMotion iPhones (less judder).
+    var highRefresh: Bool = true
     var screenMode: ScreenMode = .fill
     /// 0 = stretch only, 1 = crop only. 0.5 splits the difference.
     var fillBalance: Double = 0.5
     var showStats: Bool = true
     var rumble: Bool = true
     var lightbar: Bool = true
+    var adaptiveTriggers: Bool = true
+    /// 0...1 multiplier for trigger resistance/vibration.
+    var triggerStrength: Double = 1.0
+
+    init() {}
+
+    /// Tolerant decoding: settings saved by older versions keep working and
+    /// new options get their defaults.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = StreamSettings()
+        func v<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback
+        }
+        autoQuality = v(.autoQuality, d.autoQuality)
+        resolution = v(.resolution, d.resolution)
+        fps = v(.fps, d.fps)
+        bitrateKbps = v(.bitrateKbps, d.bitrateKbps)
+        codec = v(.codec, d.codec)
+        hdr = v(.hdr, d.hdr)
+        enhance = v(.enhance, d.enhance)
+        highRefresh = v(.highRefresh, d.highRefresh)
+        screenMode = v(.screenMode, d.screenMode)
+        fillBalance = v(.fillBalance, d.fillBalance)
+        showStats = v(.showStats, d.showStats)
+        rumble = v(.rumble, d.rumble)
+        lightbar = v(.lightbar, d.lightbar)
+        adaptiveTriggers = v(.adaptiveTriggers, d.adaptiveTriggers)
+        triggerStrength = v(.triggerStrength, d.triggerStrength)
+    }
 
     struct BitratePreset: Identifiable {
         let label: String
@@ -70,8 +120,37 @@ struct StreamSettings: Codable, Equatable {
         .init(label: "Mobile data · 5 Mb/s", kbps: 5_000),
         .init(label: "Balanced · 10 Mb/s", kbps: 10_000),
         .init(label: "Home Wi-Fi · 15 Mb/s", kbps: 15_000),
+        .init(label: "High · 20 Mb/s", kbps: 20_000),
         .init(label: "Max · 30 Mb/s", kbps: 30_000),
     ]
+}
+
+/// What a session actually asks the console for, after Auto quality is applied.
+struct EffectiveQuality: Equatable {
+    var resolution: VideoResolution
+    var fps: UInt32
+    var bitrateKbps: UInt32
+    var hevc: Bool
+    var hdr: Bool
+    var label: String
+
+    enum Link { case homeWiFi, awayWiFi, cellular }
+
+    static func resolve(_ s: StreamSettings, ps5: Bool, link: Link, hdrDisplay: Bool) -> EffectiveQuality {
+        let hevc = ps5 && s.codec == .hevc
+        let hdr = hevc && s.hdr && hdrDisplay
+        guard s.autoQuality else {
+            return .init(resolution: s.resolution, fps: s.fps, bitrateKbps: s.bitrateKbps, hevc: hevc, hdr: hdr, label: "manual")
+        }
+        switch link {
+        case .homeWiFi:
+            return .init(resolution: .p1080, fps: 60, bitrateKbps: 20_000, hevc: hevc, hdr: hdr, label: "auto · home")
+        case .awayWiFi:
+            return .init(resolution: .p1080, fps: 60, bitrateKbps: 10_000, hevc: hevc, hdr: hdr, label: "auto · away")
+        case .cellular:
+            return .init(resolution: .p720, fps: 60, bitrateKbps: 6_000, hevc: hevc, hdr: false, label: "auto · mobile")
+        }
+    }
 }
 
 enum ScreenGeometry {

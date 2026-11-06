@@ -10,6 +10,7 @@ struct EdgePlayApp: App {
         if rp_global_init() != 0 {
             print("chiaki failed to initialise")
         }
+        NetworkMonitor.shared.start()
     }
 
     var body: some Scene {

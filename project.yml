@@ -23,6 +23,10 @@ targets:
       - framework: Frameworks/ChiakiCore.xcframework
         embed: false
       - sdk: VideoToolbox.framework
+      - sdk: Metal.framework
+      - sdk: MetalFX.framework
+      - sdk: QuartzCore.framework
+      - sdk: Network.framework
       - sdk: CoreMedia.framework
       - sdk: AVFoundation.framework
       - sdk: AudioToolbox.framework
@@ -53,6 +57,8 @@ targets:
       path: EdgePlay/Info.plist
       properties:
         CFBundleDisplayName: EdgePlay
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIRequiresFullScreen: true
         UIStatusBarHidden: false
@@ -72,3 +78,5 @@ targets:
           - ProfileName: ExtendedGamepad
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
+        # Allow 120 Hz presentation on ProMotion iPhones.
+        CADisableMinimumFrameDurationOnPhone: true

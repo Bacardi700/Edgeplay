@@ -33,6 +33,7 @@ final class ControllerInput {
     }
 
     func stop() {
+        clearTriggers()
         pollTimer?.invalidate()
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         observers.removeAll()
@@ -52,6 +53,7 @@ final class ControllerInput {
             g.valueChangedHandler = { [weak self] _, _ in self?.send() }
         }
         setupHaptics()
+        lastTriggers = (.off, .off)
         onControllersChanged?(pad != nil)
     }
 
@@ -133,6 +135,23 @@ final class ControllerInput {
     }
 
     // MARK: feedback
+
+    private var lastTriggers: (TriggerEffect, TriggerEffect) = (.off, .off)
+
+    /// Plays the console's adaptive trigger effects on a DualSense (no-op on other pads).
+    func setTriggers(left: TriggerEffect, right: TriggerEffect, scale: Float) {
+        guard let ds = controller?.extendedGamepad as? GCDualSenseGamepad else { return }
+        if lastTriggers.0 != left { left.apply(to: ds.leftTrigger, scale: scale) }
+        if lastTriggers.1 != right { right.apply(to: ds.rightTrigger, scale: scale) }
+        lastTriggers = (left, right)
+    }
+
+    func clearTriggers() {
+        guard let ds = controller?.extendedGamepad as? GCDualSenseGamepad else { return }
+        ds.leftTrigger.setModeOff()
+        ds.rightTrigger.setModeOff()
+        lastTriggers = (.off, .off)
+    }
 
     func setLightbar(red: UInt8, green: UInt8, blue: UInt8) {
         controller?.light?.color = GCColor(red: Float(red) / 255, green: Float(green) / 255, blue: Float(blue) / 255)

@@ -3,12 +3,20 @@
 import AVFoundation
 import CoreMedia
 import UIKit
+import VideoToolbox
 
 /// Turns chiaki's Annex-B access units into CMSampleBuffers and hands them to an
 /// AVSampleBufferDisplayLayer, which decodes in hardware and shows each frame immediately.
 final class VideoDecoder {
+    /// Fallback output when Metal isn't available.
     let layer = AVSampleBufferDisplayLayer()
+    /// Preferred output: hardware decode to pixel buffers, then Metal (upscale + sharpen).
+    let renderer: MetalVideoRenderer?
+    var outputLayer: CALayer { renderer?.layer ?? layer }
     private let hevc: Bool
+    private let tenBit: Bool
+    private var vtSession: VTDecompressionSession?
+    private let vtLock = NSLock()   // decode runs on chiaki's thread, reset on main
 
     private var formatDescription: CMVideoFormatDescription?
     private var vps: Data?, sps: Data?, pps: Data?
@@ -21,8 +29,10 @@ final class VideoDecoder {
     private var frames = 0
     private var bytes = 0
 
-    init(hevc: Bool) {
+    init(hevc: Bool, hdr: Bool = false, useMetal: Bool = true) {
         self.hevc = hevc
+        self.tenBit = hdr
+        self.renderer = useMetal ? MetalVideoRenderer(hdr: hdr) : nil
         layer.videoGravity = .resize          // geometry is handled by the view's frame
         layer.preventsDisplaySleepDuringVideoPlayback = true
         layer.backgroundColor = UIColor.black.cgColor
@@ -107,6 +117,9 @@ final class VideoDecoder {
                                  Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
         }
 
+        if let renderer {
+            return decode(sample, format: format, to: renderer)
+        }
         if layer.status == .failed {
             // Usually after the app was backgrounded. Reset and wait for a keyframe.
             layer.flush()
@@ -118,6 +131,55 @@ final class VideoDecoder {
 
     func reset() {
         layer.flushAndRemoveImage()
+        vtLock.lock(); invalidateSession(); vtLock.unlock()
+        renderer?.flush()
+    }
+
+    // MARK: - VideoToolbox path
+
+    private var sessionFormat: CMVideoFormatDescription?
+
+    private func decode(_ sample: CMSampleBuffer, format: CMVideoFormatDescription, to renderer: MetalVideoRenderer) -> Bool {
+        vtLock.lock(); defer { vtLock.unlock() }
+        if vtSession == nil || sessionFormat.map({ !CMFormatDescriptionEqual($0, otherFormatDescription: format) }) ?? true {
+            invalidateSession()
+            guard makeSession(format) else { return false }
+        }
+        guard let session = vtSession else { return false }
+        var ok = true
+        let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [], infoFlagsOut: nil) { status, _, image, _, _ in
+            if status == noErr, let image { renderer.submit(image) } else { ok = false }
+        }
+        if status == kVTInvalidSessionErr {
+            // Happens after the app was in the background; rebuild on the next keyframe.
+            invalidateSession()
+            return false
+        }
+        return status == noErr && ok
+    }
+
+    private func makeSession(_ format: CMVideoFormatDescription) -> Bool {
+        let pixelFormat = tenBit ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        let attrs: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat,
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [CFString: Any](),
+        ]
+        var s: VTDecompressionSession?
+        let status = VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: format,
+                                                  decoderSpecification: nil, imageBufferAttributes: attrs as CFDictionary,
+                                                  outputCallback: nil, decompressionSessionOut: &s)
+        guard status == noErr, let s else { return false }
+        VTSessionSetProperty(s, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        vtSession = s
+        sessionFormat = format
+        return true
+    }
+
+    private func invalidateSession() {
+        if let s = vtSession { VTDecompressionSessionInvalidate(s) }
+        vtSession = nil
+        sessionFormat = nil
     }
 
     // MARK: - helpers

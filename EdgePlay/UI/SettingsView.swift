@@ -34,29 +34,53 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Picker("Resolution", selection: $store.settings.resolution) {
-                        ForEach(VideoResolution.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Picker("Frame rate", selection: $store.settings.fps) {
-                        Text("30 fps").tag(UInt32(30))
-                        Text("60 fps").tag(UInt32(60))
-                    }
-                    Picker("Bitrate", selection: $store.settings.bitrateKbps) {
-                        ForEach(StreamSettings.bitratePresets) { Text($0.label).tag($0.kbps) }
+                    Toggle("Auto quality", isOn: $store.settings.autoQuality)
+                    if !store.settings.autoQuality {
+                        Picker("Resolution", selection: $store.settings.resolution) {
+                            ForEach(VideoResolution.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Picker("Frame rate", selection: $store.settings.fps) {
+                            Text("30 fps").tag(UInt32(30))
+                            Text("60 fps").tag(UInt32(60))
+                        }
+                        Picker("Bitrate", selection: $store.settings.bitrateKbps) {
+                            ForEach(StreamSettings.bitratePresets) { Text($0.label).tag($0.kbps) }
+                        }
                     }
                     Picker("Codec (PS5)", selection: $store.settings.codec) {
                         ForEach(VideoCodec.allCases) { Text($0.rawValue).tag($0) }
                     }
+                    Toggle("HDR (PS5, HEVC)", isOn: $store.settings.hdr)
+                        .disabled(store.settings.codec != .hevc)
                 } header: {
                     Text("Stream quality")
                 } footer: {
-                    Text("1080p needs PS Plus on PS4 Pro/PS5 for some titles; the console falls back automatically. HEVC looks better at the same bitrate. Use 5–10 Mb/s on mobile data.")
+                    Text("Auto picks 1080p60 at 20 Mb/s on home Wi-Fi, 1080p60 at 10 Mb/s away from home, and 720p60 at 6 Mb/s on mobile data. PS5 Remote Play tops out at 1080p. HDR needs an HDR iPhone screen and an HDR game.")
+                }
+
+                Section {
+                    Picker("Picture enhance", selection: $store.settings.enhance) {
+                        ForEach(EnhanceLevel.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("120 Hz presentation (ProMotion)", isOn: $store.settings.highRefresh)
+                } header: {
+                    Text("Picture")
+                } footer: {
+                    Text("Enhance upscales the 1080p stream to your screen's exact resolution with MetalFX and sharpens away compression blur. 120 Hz shows each frame the moment it's decoded for smoother motion.")
                 }
 
                 Section("Overlay & controller") {
                     Toggle("Show stream stats", isOn: $store.settings.showStats)
                     Toggle("Controller rumble", isOn: $store.settings.rumble)
                     Toggle("DualSense lightbar", isOn: $store.settings.lightbar)
+                    Toggle("Adaptive triggers", isOn: $store.settings.adaptiveTriggers)
+                    if store.settings.adaptiveTriggers {
+                        HStack {
+                            Text("Trigger strength")
+                            Slider(value: $store.settings.triggerStrength, in: 0.2...1)
+                        }
+                    }
                 }
 
                 Section("Playing away from home") {

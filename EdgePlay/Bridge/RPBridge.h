@@ -61,6 +61,10 @@ typedef struct {
     /// Interleaved signed 16-bit PCM. sample_frames = samples per channel.
     void (*on_audio_pcm)(void *ctx, const int16_t *pcm, size_t sample_frames);
     void (*on_log)(void *ctx, int level, const char *msg);
+    /// DualSense adaptive trigger effect, raw as the console sends it:
+    /// effect type byte + 10 parameter bytes per trigger (DualSense output-report layout).
+    void (*on_trigger_effects)(void *ctx, uint8_t type_left, const uint8_t *left10,
+                               uint8_t type_right, const uint8_t *right10);
 } RPCallbacks;
 
 typedef struct RPSession RPSession;

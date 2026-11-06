@@ -12,6 +12,7 @@ final class StreamSession {
         case nickname(String)
         case rumble(left: UInt8, right: UInt8)
         case lightbar(red: UInt8, green: UInt8, blue: UInt8)
+        case triggers(left: TriggerEffect, right: TriggerEffect)
         case ended(reason: String, isError: Bool)
     }
 
@@ -27,6 +28,7 @@ final class StreamSession {
     let console: Console
     let host: String
     let settings: StreamSettings
+    let quality: EffectiveQuality
     let video: VideoDecoder
     let audio = AudioPlayer()
     var onEvent: ((Event) -> Void)?
@@ -37,20 +39,22 @@ final class StreamSession {
     private(set) var dimensions: CMVideoDimensions?
     private var closed = false
 
-    init(console: Console, host: String, settings: StreamSettings) throws {
+    init(console: Console, host: String, settings: StreamSettings, quality: EffectiveQuality) throws {
         self.console = console
         self.host = host
         self.settings = settings
-        let useHEVC = console.ps5 && settings.codec == .hevc
-        video = VideoDecoder(hevc: useHEVC)
+        self.quality = quality
+        video = VideoDecoder(hevc: quality.hevc, hdr: quality.hdr)
+        video.renderer?.sharpness = settings.enhance.sharpness
+        video.renderer?.useMetalFX = settings.enhance != .off
 
         var cfg = RPConnectConfig()
         cfg.ps5 = console.ps5
-        cfg.width = settings.resolution.size.width
-        cfg.height = settings.resolution.size.height
-        cfg.fps = settings.fps
-        cfg.bitrate_kbps = settings.bitrateKbps
-        cfg.codec = useHEVC ? RP_CODEC_H265 : RP_CODEC_H264
+        cfg.width = quality.resolution.size.width
+        cfg.height = quality.resolution.size.height
+        cfg.fps = quality.fps
+        cfg.bitrate_kbps = quality.bitrateKbps
+        cfg.codec = quality.hdr ? RP_CODEC_H265_HDR : (quality.hevc ? RP_CODEC_H265 : RP_CODEC_H264)
         cfg.enable_dualsense = true
         copyBytes(console.registKey, into: &cfg.regist_key)
         copyBytes(console.morning, into: &cfg.morning)
@@ -69,6 +73,13 @@ final class StreamSession {
         callbacks.on_audio_pcm = { ctx, pcm, frames in
             guard let pcm else { return }
             StreamSession.from(ctx).audio.push(pcm, frames: frames)
+        }
+        callbacks.on_trigger_effects = { ctx, typeL, left, typeR, right in
+            guard let left, let right else { return }
+            let l = TriggerEffect(type: typeL, params: Array(UnsafeBufferPointer(start: left, count: 10)))
+            let r = TriggerEffect(type: typeR, params: Array(UnsafeBufferPointer(start: right, count: 10)))
+            let me = StreamSession.from(ctx)
+            DispatchQueue.main.async { [weak me] in me?.onEvent?(.triggers(left: l, right: r)) }
         }
         callbacks.on_log = { _, level, msg in
             #if DEBUG

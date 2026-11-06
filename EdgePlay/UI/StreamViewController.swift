@@ -55,7 +55,7 @@ final class StreamViewController: UIViewController {
         videoContainer.frame = view.bounds
         videoContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(videoContainer)
-        videoContainer.layer.addSublayer(session.video.layer)
+        videoContainer.layer.addSublayer(session.video.outputLayer)
 
         setupOverlays()
         setupGestures()
@@ -79,6 +79,7 @@ final class StreamViewController: UIViewController {
         setNeedsUpdateOfHomeIndicatorAutoHidden()
         setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
         flashMenuButton()
+        session.video.renderer?.start(highRefresh: settings.highRefresh)
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateStats() }
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -88,6 +89,7 @@ final class StreamViewController: UIViewController {
         super.viewWillDisappear(animated)
         UIApplication.shared.isIdleTimerDisabled = false
         statsTimer?.invalidate()
+        session.video.renderer?.stop()
         input.stop()
         session.close()
         NotificationCenter.default.removeObserver(self)
@@ -103,9 +105,16 @@ final class StreamViewController: UIViewController {
         let aspect: CGFloat = dims.map { CGFloat($0.width) / CGFloat(max($0.height, 1)) } ?? 16.0 / 9.0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        session.video.layer.frame = ScreenGeometry.videoFrame(in: videoContainer.bounds, videoAspect: aspect,
-                                                              mode: settings.screenMode, balance: settings.fillBalance)
+        let frame = ScreenGeometry.videoFrame(in: videoContainer.bounds, videoAspect: aspect,
+                                              mode: settings.screenMode, balance: settings.fillBalance)
+        session.video.outputLayer.frame = frame
         CATransaction.commit()
+        if let r = session.video.renderer {
+            // Render at the panel's real pixel size so MetalFX/sharpening work on true pixels.
+            let scale = view.window?.screen.nativeScale ?? UIScreen.main.nativeScale
+            r.layer.contentsScale = scale
+            r.setDrawableSize(CGSize(width: (frame.width * scale).rounded(), height: (frame.height * scale).rounded()))
+        }
     }
 
     @objc private func appBecameActive() {
@@ -132,6 +141,10 @@ final class StreamViewController: UIViewController {
                 break
             case .rumble(let l, let r):
                 if settings.rumble { input.rumble(left: l, right: r) }
+            case .triggers(let l, let r):
+                if settings.adaptiveTriggers {
+                    input.setTriggers(left: l, right: r, scale: Float(settings.triggerStrength))
+                }
             case .lightbar(let r, let g, let b):
                 if settings.lightbar { input.setLightbar(red: r, green: g, blue: b) }
             case .ended(let reason, let isError):
@@ -244,10 +257,13 @@ final class StreamViewController: UIViewController {
     private func updateStats() {
         let s = session.sampleStats()
         guard settings.showStats, connected else { return }
-        let res = s.resolution.map { "\($0.height)p" } ?? settings.resolution.rawValue
-        let codec = (session.console.ps5 && settings.codec == .hevc) ? "HEVC" : "H.264"
-        statsLabel.text = String(format: "%@ · %@ · %.0f fps\n%.1f Mb/s · RTT %.0f ms\nloss %.1f%% · dropped %d",
-                                 res, codec, s.fps, s.receivedMbps, s.rttMs, s.packetLoss * 100, s.framesLost)
+        let q = session.quality
+        let res = s.resolution.map { "\($0.height)p" } ?? q.resolution.rawValue
+        let codec = q.hdr ? "HEVC HDR" : (q.hevc ? "HEVC" : "H.264")
+        let enhance = session.video.renderer == nil ? "basic" : settings.enhance.rawValue.lowercased()
+        statsLabel.text = String(format: "%@ · %@ · %.0f fps · %@\n%.1f/%d Mb/s · RTT %.0f ms\nloss %.1f%% · dropped %d · enhance %@",
+                                 res, codec, s.fps, q.label, s.receivedMbps, Int(q.bitrateKbps / 1000), s.rttMs,
+                                 s.packetLoss * 100, s.framesLost, enhance)
     }
 
     // MARK: gestures & menu
@@ -298,6 +314,8 @@ final class StreamViewController: UIViewController {
             guard let self else { return }
             settings = new
             statsLabel.isHidden = !new.showStats
+            session.video.renderer?.sharpness = new.enhance.sharpness
+            session.video.renderer?.useMetalFX = new.enhance != .off
             layoutVideo()
             saveSettings(new)
         }
@@ -329,6 +347,7 @@ final class StreamMenuPanel: UIVisualEffectView {
     private let balance = UISlider()
     private let balanceRow = UIStackView()
     private let stats = UISwitch()
+    private let enhance = UISegmentedControl(items: EnhanceLevel.allCases.map(\.rawValue))
 
     init() {
         super.init(effect: UIBlurEffect(style: .systemMaterialDark))
@@ -351,6 +370,12 @@ final class StreamMenuPanel: UIVisualEffectView {
         balanceRow.axis = .horizontal
         balanceRow.spacing = 8
         [stretch, balance, crop].forEach(balanceRow.addArrangedSubview)
+
+        enhance.addTarget(self, action: #selector(changed), for: .valueChanged)
+        let enhanceTitle = UILabel()
+        enhanceTitle.text = "Picture enhance"
+        enhanceTitle.font = .preferredFont(forTextStyle: .subheadline)
+        enhanceTitle.textColor = .white
 
         let statsLabel = UILabel()
         statsLabel.text = "Show stream stats"
@@ -382,7 +407,7 @@ final class StreamMenuPanel: UIVisualEffectView {
         buttons.distribution = .fillEqually
         buttons.spacing = 8
 
-        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, statsRow, tip, buttons])
+        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, enhanceTitle, enhance, statsRow, tip, buttons])
         stack.axis = .vertical
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -404,12 +429,14 @@ final class StreamMenuPanel: UIVisualEffectView {
         balanceRow.alpha = s.screenMode == .fill ? 1 : 0.35
         balance.isEnabled = s.screenMode == .fill
         stats.isOn = s.showStats
+        enhance.selectedSegmentIndex = EnhanceLevel.allCases.firstIndex(of: s.enhance) ?? 1
     }
 
     @objc private func changed() {
         settings.screenMode = ScreenMode.allCases[max(0, mode.selectedSegmentIndex)]
         settings.fillBalance = Double(balance.value)
         settings.showStats = stats.isOn
+        settings.enhance = EnhanceLevel.allCases[max(0, enhance.selectedSegmentIndex)]
         sync(settings)
         onChange?(settings)
     }
@@ -440,7 +467,11 @@ enum StreamPresenter {
         while let p = top.presentedViewController { top = p }
 
         do {
-            let session = try StreamSession(console: console, host: host, settings: store.settings)
+            let link: EffectiveQuality.Link = NetworkMonitor.shared.isCellular ? .cellular
+                : (host == console.homeHost ? .homeWiFi : .awayWiFi)
+            let hdrDisplay = (top.view.window?.screen ?? UIScreen.main).potentialEDRHeadroom > 1.0
+            let quality = EffectiveQuality.resolve(store.settings, ps5: console.ps5, link: link, hdrDisplay: hdrDisplay)
+            let session = try StreamSession(console: console, host: host, settings: store.settings, quality: quality)
             let vc = StreamViewController(session: session, settings: store.settings) { new in
                 Task { @MainActor in store.settings = new }
             }

@@ -83,6 +83,18 @@ static void session_event_cb(ChiakiEvent *ev, void *user)
     }
 }
 
+static void session_event_cb_outer(ChiakiEvent *ev, void *user)
+{
+    RPSession *s = user;
+    if (ev->type == CHIAKI_EVENT_TRIGGER_EFFECTS) {
+        if (s->cb.on_trigger_effects)
+            s->cb.on_trigger_effects(s->ctx, ev->trigger_effects.type_left, ev->trigger_effects.left,
+                                     ev->trigger_effects.type_right, ev->trigger_effects.right);
+        return;
+    }
+    session_event_cb(ev, user);
+}
+
 static bool session_video_cb(uint8_t *buf, size_t size, int32_t frames_lost, bool recovered, void *user)
 {
     RPSession *s = user;
@@ -159,7 +171,7 @@ RPSession *rp_session_create(const RPConnectConfig *cfg, RPCallbacks callbacks, 
         return NULL;
     }
 
-    chiaki_session_set_event_cb(&s->session, session_event_cb, s);
+    chiaki_session_set_event_cb(&s->session, session_event_cb_outer, s);
     chiaki_session_set_video_sample_cb(&s->session, session_video_cb, s);
 
     chiaki_opus_decoder_init(&s->opus, &s->log);
