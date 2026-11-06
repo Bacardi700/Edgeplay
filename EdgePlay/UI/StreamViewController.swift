@@ -103,19 +103,41 @@ final class StreamViewController: UIViewController {
     }
 
     private func layoutVideo() {
-        let dims = session.dimensions
-        let aspect: CGFloat = dims.map { CGFloat($0.width) / CGFloat(max($0.height, 1)) } ?? 16.0 / 9.0
+        let renderer = session.video.renderer
+        var aspect: CGFloat = 16.0 / 9.0
+        if let d = session.dimensions, d.height > 0 {
+            aspect = renderer?.effectiveAspect(videoWidth: CGFloat(d.width), videoHeight: CGFloat(d.height))
+                ?? CGFloat(d.width) / CGFloat(d.height)
+        }
+        let bounds = videoContainer.bounds
+        let layerFrame: CGRect
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let frame = ScreenGeometry.videoFrame(in: videoContainer.bounds, videoAspect: aspect,
-                                              mode: settings.screenMode, balance: settings.fillBalance)
-        session.video.outputLayer.frame = frame
+        if settings.screenMode == .smart, let renderer {
+            // Layer covers the whole screen; the picture sits fitted inside it and the
+            // shader paints the ambient glow around it.
+            layerFrame = bounds
+            let fit = ScreenGeometry.videoFrame(in: bounds, videoAspect: aspect, mode: .fit, balance: 0)
+            renderer.contentRect = CGRect(x: (fit.minX - bounds.minX) / max(bounds.width, 1),
+                                          y: (fit.minY - bounds.minY) / max(bounds.height, 1),
+                                          width: fit.width / max(bounds.width, 1),
+                                          height: fit.height / max(bounds.height, 1))
+            renderer.ambient = true
+        } else {
+            layerFrame = ScreenGeometry.videoFrame(in: bounds, videoAspect: aspect,
+                                                   mode: settings.screenMode, balance: settings.fillBalance)
+            renderer?.contentRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+            renderer?.ambient = false
+        }
+        session.video.outputLayer.frame = layerFrame
         CATransaction.commit()
-        if let r = session.video.renderer {
+        if let r = renderer {
+            // Netflix-style: trim black bars baked into the picture before fitting/filling.
+            r.trimBlackBars = settings.screenMode != .fit
             // Render at the panel's real pixel size so MetalFX/sharpening work on true pixels.
             let scale = view.window?.screen.nativeScale ?? UIScreen.main.nativeScale
             r.layer.contentsScale = scale
-            r.setDrawableSize(CGSize(width: (frame.width * scale).rounded(), height: (frame.height * scale).rounded()))
+            r.setDrawableSize(CGSize(width: (layerFrame.width * scale).rounded(), height: (layerFrame.height * scale).rounded()))
         }
     }
 
@@ -129,6 +151,10 @@ final class StreamViewController: UIViewController {
 
     private func wireSession() {
         session.onDimensions = { [weak self] _ in self?.layoutVideo() }
+        session.video.renderer?.onCropChanged = { [weak self] _, _ in
+            guard let self else { return }
+            UIView.animate(withDuration: 0.3) { self.layoutVideo() }
+        }
         session.onEvent = { [weak self] event in
             guard let self else { return }
             switch event {
@@ -307,7 +333,7 @@ final class StreamViewController: UIViewController {
     @objc private func pinched(_ g: UIPinchGestureRecognizer) {
         switch g.state {
         case .began:
-            if settings.screenMode == .fit { settings.screenMode = .fill }
+            if settings.screenMode != .fill { settings.screenMode = .fill }
             pinchStartBalance = settings.fillBalance
         case .changed:
             settings.fillBalance = min(1, max(0, pinchStartBalance + Double(g.scale - 1) * 1.5))
@@ -411,7 +437,7 @@ final class StreamMenuPanel: UIVisualEffectView {
         let statsRow = UIStackView(arrangedSubviews: [statsLabel, stats])
 
         let tip = UILabel()
-        tip.text = "Tip: pinch the picture to adjust crop vs stretch. Hold the PS button for this menu."
+        tip.text = "Smart never stretches or crops: it glows the sides and trims black bars. Pinch to switch to Fill. Hold the PS button for this menu."
         tip.font = .preferredFont(forTextStyle: .caption2)
         tip.textColor = .secondaryLabel
         tip.numberOfLines = 0
