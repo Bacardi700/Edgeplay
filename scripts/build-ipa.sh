@@ -55,8 +55,9 @@ log "Checking the app bundle"
 BIN="$APP/EdgePlay"
 ls -la "$APP"
 otool -L "$BIN" | grep -q libswiftCore || { echo "App binary has no Swift code linked; sources missing?" >&2; exit 1; }
-nm -U "$BIN" 2>/dev/null | grep -q "EdgePlayApp" || { echo "EdgePlayApp entry point not found in binary" >&2; exit 1; }
-nm -U "$BIN" 2>/dev/null | grep -q "_rp_session_create" || { echo "chiaki bridge not linked" >&2; exit 1; }
+# Release binaries are stripped, so look for strings that only exist if the code is in.
+strings "$BIN" | grep -q "EdgePlayApp" || { echo "EdgePlayApp not found in binary" >&2; exit 1; }
+strings "$BIN" | grep -q "ChiakiOpusDecoder" || { echo "chiaki library not linked" >&2; exit 1; }
 [[ -f "$APP/Assets.car" ]] || echo "warning: no Assets.car (app icon missing)" >&2
 echo "Swift code, chiaki bridge and assets present."
 
