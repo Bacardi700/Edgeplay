@@ -11,6 +11,7 @@ struct EdgePlayApp: App {
             print("chiaki failed to initialise")
         }
         NetworkMonitor.shared.start()
+        ControllerGestureGuard.shared.start()
     }
 
     var body: some Scene {

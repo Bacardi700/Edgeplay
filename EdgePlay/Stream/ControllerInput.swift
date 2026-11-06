@@ -88,11 +88,8 @@ final class ControllerInput {
     private func pickController() {
         let pad = GCController.controllers().first { $0.extendedGamepad != nil }
         controller = pad
+        if let pad { ControllerGestureGuard.shared.apply(to: pad) }
         if let g = pad?.extendedGamepad {
-            // Keep iOS from grabbing these buttons for screenshots/app switcher.
-            g.buttonHome?.preferredSystemGestureState = .disabled
-            g.buttonOptions?.preferredSystemGestureState = .disabled
-            g.buttonMenu.preferredSystemGestureState = .disabled
             g.valueChangedHandler = { [weak self] _, _ in self?.send() }
         }
         updateMotionActivation()
