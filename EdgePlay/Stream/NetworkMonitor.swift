@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import Foundation
 import Network
 
 /// Knows whether we're on mobile data, so Auto quality can pick a lighter stream.
