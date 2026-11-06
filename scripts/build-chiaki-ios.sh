@@ -61,6 +61,9 @@ if grep -q '^if(APPLE)$' "$SRC/CMakeLists.txt"; then
   /usr/bin/sed -i '' 's/^if(APPLE)$/if(APPLE AND NOT IOS)/' "$SRC/CMakeLists.txt"
 fi
 
+# EdgePlay's own tweaks to chiaki (network QoS, bigger socket buffer). Idempotent.
+python3 "$ROOT/scripts/patches/chiaki-network.py" "$SRC"
+
 # ------------------------------------------------------------------ vcpkg deps
 if [[ ! -x "$VCPKG/vcpkg" ]]; then
   log "Bootstrapping vcpkg"

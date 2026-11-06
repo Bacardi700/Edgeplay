@@ -17,6 +17,8 @@ final class StreamViewController: UIViewController {
     private let spinner = UIActivityIndicatorView(style: .large)
     private let menuButton = UIButton(type: .system)
     private let hintLabel = PaddedLabel()
+    private let netBadge = PaddedLabel()
+    private var poorSeconds = 0
     private lazy var panel = StreamMenuPanel()
     private var statsTimer: Timer?
     private var hideMenuButtonWork: DispatchWorkItem?
@@ -224,6 +226,16 @@ final class StreamViewController: UIViewController {
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(hintLabel)
 
+        netBadge.text = "Weak connection · lower the bitrate or move closer to Wi-Fi"
+        netBadge.font = .preferredFont(forTextStyle: .caption1)
+        netBadge.textColor = .white
+        netBadge.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.85)
+        netBadge.layer.cornerRadius = 8
+        netBadge.clipsToBounds = true
+        netBadge.isHidden = true
+        netBadge.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(netBadge)
+
         var config = UIButton.Configuration.filled()
         config.image = UIImage(systemName: "ellipsis")
         config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.5)
@@ -241,6 +253,8 @@ final class StreamViewController: UIViewController {
             statusLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 16),
             spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -16),
+            netBadge.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            netBadge.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
             hintLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             hintLabel.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -12),
             menuButton.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -8),
@@ -256,13 +270,26 @@ final class StreamViewController: UIViewController {
 
     private func updateStats() {
         let s = session.sampleStats()
-        guard settings.showStats, connected else { return }
+        guard connected else { return }
+
+        // Connection health: show a hint if it stays poor for a few seconds.
+        let health: String
+        if s.packetLoss < 0.01 && s.rttMs < 40 { health = "● good" }
+        else if s.packetLoss < 0.03 && s.rttMs < 80 { health = "● fair" }
+        else { health = "● poor" }
+        poorSeconds = health == "● poor" ? poorSeconds + 1 : 0
+        let showBadge = poorSeconds >= 3
+        if netBadge.isHidden == showBadge {
+            UIView.animate(withDuration: 0.25) { self.netBadge.isHidden = !showBadge }
+        }
+
+        guard settings.showStats else { return }
         let q = session.quality
         let res = s.resolution.map { "\($0.height)p" } ?? q.resolution.rawValue
         let codec = q.hdr ? "HEVC HDR" : (q.hevc ? "HEVC" : "H.264")
         let enhance = session.video.renderer == nil ? "basic" : settings.enhance.rawValue.lowercased()
-        statsLabel.text = String(format: "%@ · %@ · %.0f fps · %@\n%.1f/%d Mb/s · RTT %.0f ms\nloss %.1f%% · dropped %d · enhance %@",
-                                 res, codec, s.fps, q.label, s.receivedMbps, Int(q.bitrateKbps / 1000), s.rttMs,
+        statsLabel.text = String(format: "%@ · %@ · %.0f fps · %@\n%.1f/%d Mb/s · RTT %.0f ms · %@\nloss %.1f%% · dropped %d · enhance %@",
+                                 res, codec, s.fps, q.label, s.receivedMbps, Int(q.bitrateKbps / 1000), s.rttMs, health,
                                  s.packetLoss * 100, s.framesLost, enhance)
     }
 
