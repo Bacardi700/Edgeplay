@@ -45,10 +45,20 @@ xcodebuild \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="" \
   DEVELOPMENT_TEAM="" \
-  build | { command -v xcpretty >/dev/null && xcpretty || cat; }
+  build 2>&1 | tee "$OUT/xcodebuild.log" | grep -E "^(SwiftCompile|CompileC|CompileAssetCatalog|Ld |\*\*)|error:|warning: .*\.swift" || true
+grep -q "\*\* BUILD SUCCEEDED \*\*" "$OUT/xcodebuild.log" || { echo "xcodebuild failed; see $OUT/xcodebuild.log" >&2; tail -50 "$OUT/xcodebuild.log" >&2; exit 1; }
 
 APP="$DERIVED/Build/Products/Release-iphoneos/EdgePlay.app"
 [[ -d "$APP" ]] || { echo "Build produced no app at $APP" >&2; exit 1; }
+
+log "Checking the app bundle"
+BIN="$APP/EdgePlay"
+ls -la "$APP"
+otool -L "$BIN" | grep -q libswiftCore || { echo "App binary has no Swift code linked; sources missing?" >&2; exit 1; }
+nm -U "$BIN" 2>/dev/null | grep -q "EdgePlayApp" || { echo "EdgePlayApp entry point not found in binary" >&2; exit 1; }
+nm -U "$BIN" 2>/dev/null | grep -q "_rp_session_create" || { echo "chiaki bridge not linked" >&2; exit 1; }
+[[ -f "$APP/Assets.car" ]] || echo "warning: no Assets.car (app icon missing)" >&2
+echo "Swift code, chiaki bridge and assets present."
 
 log "Packaging IPA"
 STAGE="$OUT/ipa"
