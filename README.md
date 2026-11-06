@@ -12,6 +12,9 @@ A PS5/PS4 Remote Play client for iPhone that fills the whole screen, built on
 - **Away-from-home play.** Each console has a home address and an away address (Tailscale IP or
   MagicDNS name, or a public IP if you use port forwarding). The app checks both
   and uses whichever answers. *Wake* sends the wake-from-rest packet over either one.
+- **Adaptive triggers.** The resistance, weapon "click" and trigger vibration a PS5 game sends play on your DualSense's L2/R2, with an adjustable strength.
+- **Picture enhance.** The stream is hardware-decoded, upscaled with MetalFX to your screen's exact resolution, then sharpened to undo compression blur (Off / Balanced / Sharp). HDR (PS5, HEVC) and 120 Hz presentation on ProMotion iPhones are supported.
+- **Auto quality.** 1080p60 at 20 Mb/s on home Wi-Fi, 10 Mb/s away from home, and 720p60 at 6 Mb/s on mobile data. You can also set it manually.
 - **Stream stats.** A HUD shows resolution, codec, fps, received Mb/s, RTT, packet loss and dropped frames.
   You can choose 720p/1080p, 30/60 fps, a bitrate preset, and H.264 or HEVC.
 - **Controllers.** DualSense, DualShock 4, Xbox, Backbone and other MFi controllers work. The DualSense touchpad, rumble and lightbar color are passed through.
