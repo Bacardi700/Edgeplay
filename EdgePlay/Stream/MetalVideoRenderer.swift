@@ -83,19 +83,35 @@ final class MetalVideoRenderer {
 
     // MARK: lifecycle
 
+    private var renderThread: Thread?
+
+    /// Presents from a dedicated high-priority thread, so menus, the stats overlay or
+    /// anything else on the main thread can never delay a frame.
     func start(highRefresh: Bool) {
         stop()
-        let link = CADisplayLink(target: DisplayLinkProxy(self), selector: #selector(DisplayLinkProxy.tick))
         let maxFPS = Float(UIScreen.main.maximumFramesPerSecond)
         let top = highRefresh ? maxFPS : min(60, maxFPS)
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, top), maximum: top, preferred: top)
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        let proxy = DisplayLinkProxy(self)
+        let thread = Thread { [weak self] in
+            let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, top), maximum: top, preferred: top)
+            link.add(to: .current, forMode: .default)
+            self?.lock.lock(); self?.displayLink = link; self?.lock.unlock()
+            while !Thread.current.isCancelled {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            }
+            link.invalidate()
+        }
+        thread.name = "EdgePlay.render"
+        thread.qualityOfService = .userInteractive
+        renderThread = thread
+        thread.start()
     }
 
     func stop() {
-        displayLink?.invalidate()
-        displayLink = nil
+        renderThread?.cancel()
+        renderThread = nil
+        lock.lock(); displayLink = nil; lock.unlock()
     }
 
     func setDrawableSize(_ size: CGSize) {

@@ -58,7 +58,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Stream quality")
                 } footer: {
-                    Text("Auto picks 1080p60 at 20 Mb/s on home Wi-Fi, 1080p60 at 10 Mb/s away from home, and 720p60 at 6 Mb/s on mobile data. PS5 Remote Play tops out at 1080p. HDR needs an HDR iPhone screen and an HDR game.")
+                    Text("Auto picks 1080p60 at 15 Mb/s on home Wi-Fi, 1080p60 at 10 Mb/s away from home, and 720p60 at 6 Mb/s on mobile data. PS5 Remote Play tops out at 1080p. HDR needs an HDR iPhone screen and an HDR game.")
                 }
 
                 Section {

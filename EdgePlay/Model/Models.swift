@@ -178,7 +178,7 @@ struct EffectiveQuality: Equatable {
         }
         switch link {
         case .homeWiFi:
-            return .init(resolution: .p1080, fps: 60, bitrateKbps: 20_000, hevc: hevc, hdr: hdr, label: "auto · home")
+            return .init(resolution: .p1080, fps: 60, bitrateKbps: 15_000, hevc: hevc, hdr: hdr, label: "auto · home")
         case .awayWiFi:
             return .init(resolution: .p1080, fps: 60, bitrateKbps: 10_000, hevc: hevc, hdr: hdr, label: "auto · away")
         case .cellular:

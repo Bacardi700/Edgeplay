@@ -123,7 +123,13 @@ final class ControllerInput {
 
         // PS button: tap = PS button on the console, hold 1 s = EdgePlay menu.
         // The tap is forwarded on release so a long-press never reaches the console.
-        let home = g.buttonHome?.isPressed ?? false
+        // If iOS keeps the real PS button for itself (Games app / Game Center), pressing
+        // Create + Options together does the same job: tap = PS, hold = menu.
+        let createOptions = (g.buttonOptions?.isPressed ?? false) && g.buttonMenu.isPressed
+        if createOptions {
+            b &= ~(UInt32(RP_BTN_OPTIONS) | UInt32(RP_BTN_SHARE))
+        }
+        let home = (g.buttonHome?.isPressed ?? false) || createOptions
         let now = ProcessInfo.processInfo.systemUptime
         if home {
             if homeDownAt == nil { homeDownAt = now; menuFiredForPress = false }

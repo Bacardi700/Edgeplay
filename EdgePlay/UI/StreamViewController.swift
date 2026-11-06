@@ -464,7 +464,7 @@ final class StreamMenuPanel: UIVisualEffectView {
         let statsRow = UIStackView(arrangedSubviews: [statsLabel, stats])
 
         let tip = UILabel()
-        tip.text = "Tip: pinch to adjust (Fill: crop vs stretch, Custom: zoom). Hold the PS button for this menu."
+        tip.text = "Hold PS (or Create + Options) for this menu; tap Create + Options for the console's PS button. Pinch to adjust the picture."
         tip.font = .preferredFont(forTextStyle: .caption2)
         tip.textColor = .secondaryLabel
         tip.numberOfLines = 0

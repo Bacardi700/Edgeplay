@@ -74,6 +74,9 @@ targets:
         NSMicrophoneUsageDescription: EdgePlay sends your voice to the PlayStation for party and game chat when you turn the mic on.
         NSLocalNetworkUsageDescription: EdgePlay talks to your PlayStation on your network to check it's on, wake it and stream from it.
         GCSupportsControllerUserInteraction: true
+        # iOS Game Mode: lower controller latency, CPU/GPU priority, fewer background tasks.
+        GCSupportsGameMode: true
+        LSApplicationCategoryType: public.app-category.games
         GCSupportedGameControllers:
           - ProfileName: ExtendedGamepad
         UIApplicationSupportsIndirectInputEvents: true
