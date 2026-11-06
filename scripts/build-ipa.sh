@@ -54,10 +54,11 @@ APP="$DERIVED/Build/Products/Release-iphoneos/EdgePlay.app"
 log "Checking the app bundle"
 BIN="$APP/EdgePlay"
 ls -la "$APP"
-otool -L "$BIN" | grep -q libswiftCore || { echo "App binary has no Swift code linked; sources missing?" >&2; exit 1; }
+otool -L "$BIN" > "$OUT/otool.txt"; grep -q libswiftCore "$OUT/otool.txt" || { echo "App binary has no Swift code linked; sources missing?" >&2; exit 1; }
 # Release binaries are stripped, so look for strings that only exist if the code is in.
-strings "$BIN" | grep -q "EdgePlayApp" || { echo "EdgePlayApp not found in binary" >&2; exit 1; }
-strings "$BIN" | grep -q "ChiakiOpusDecoder" || { echo "chiaki library not linked" >&2; exit 1; }
+strings -a "$BIN" > "$OUT/strings.txt"
+grep -q "EdgePlayApp" "$OUT/strings.txt" || { echo "EdgePlayApp not found in binary" >&2; exit 1; }
+grep -q "ChiakiOpusDecoder" "$OUT/strings.txt" || { echo "chiaki library not linked" >&2; exit 1; }
 [[ -f "$APP/Assets.car" ]] || echo "warning: no Assets.car (app icon missing)" >&2
 echo "Swift code, chiaki bridge and assets present."
 
