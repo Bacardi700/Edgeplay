@@ -25,6 +25,7 @@ final class StreamViewController: UIViewController {
     private var connected = false
     private var ending = false
     private var pinchStartBalance: Double = 0
+    private var pinchStartCustom = CustomFrame()
 
     init(session: StreamSession, settings: StreamSettings, saveSettings: @escaping (StreamSettings) -> Void) {
         self.session = session
@@ -107,8 +108,10 @@ final class StreamViewController: UIViewController {
         let aspect: CGFloat = dims.map { CGFloat($0.width) / CGFloat(max($0.height, 1)) } ?? 16.0 / 9.0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let frame = ScreenGeometry.videoFrame(in: videoContainer.bounds, videoAspect: aspect,
-                                              mode: settings.screenMode, balance: settings.fillBalance)
+        let frame = settings.screenMode == .custom
+            ? ScreenGeometry.customFrame(in: videoContainer.bounds, videoAspect: aspect, custom: settings.custom)
+            : ScreenGeometry.videoFrame(in: videoContainer.bounds, videoAspect: aspect,
+                                        mode: settings.screenMode, balance: settings.fillBalance)
         session.video.outputLayer.frame = frame
         CATransaction.commit()
         if let r = session.video.renderer {
@@ -331,8 +334,16 @@ final class StreamViewController: UIViewController {
         case .began:
             if settings.screenMode == .fit { settings.screenMode = .fill }
             pinchStartBalance = settings.fillBalance
+            pinchStartCustom = settings.custom
         case .changed:
-            settings.fillBalance = min(1, max(0, pinchStartBalance + Double(g.scale - 1) * 1.5))
+            if settings.screenMode == .custom {
+                // Uniform zoom: both axes together, no extra stretch.
+                let r = CustomFrame.range
+                settings.custom.width = min(r.upperBound, max(r.lowerBound, pinchStartCustom.width * Double(g.scale)))
+                settings.custom.height = min(r.upperBound, max(r.lowerBound, pinchStartCustom.height * Double(g.scale)))
+            } else {
+                settings.fillBalance = min(1, max(0, pinchStartBalance + Double(g.scale - 1) * 1.5))
+            }
             panel.sync(settings)
             layoutVideo()
         case .ended, .cancelled:
@@ -383,7 +394,8 @@ final class StreamViewController: UIViewController {
         NSLayoutConstraint.activate([
             panel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             panel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            panel.widthAnchor.constraint(equalToConstant: 340),
+            panel.widthAnchor.constraint(equalToConstant: 360),
+            panel.heightAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.heightAnchor, constant: -16),
         ])
         menuButton.alpha = 1
     }
@@ -411,6 +423,9 @@ final class StreamMenuPanel: UIVisualEffectView {
     private let mode = UISegmentedControl(items: ScreenMode.allCases.map(\.rawValue))
     private let balance = UISlider()
     private let balanceRow = UIStackView()
+    private let customStack = UIStackView()
+    private let cWidth = UISlider(), cHeight = UISlider(), cX = UISlider(), cY = UISlider()
+    private let cLock = UISwitch()
     private let stats = UISwitch()
     private let enhance = UISegmentedControl(items: EnhanceLevel.allCases.map(\.rawValue))
 
@@ -449,7 +464,7 @@ final class StreamMenuPanel: UIVisualEffectView {
         let statsRow = UIStackView(arrangedSubviews: [statsLabel, stats])
 
         let tip = UILabel()
-        tip.text = "Tip: pinch the picture to adjust crop vs stretch. Hold the PS button for this menu."
+        tip.text = "Tip: pinch to adjust (Fill: crop vs stretch, Custom: zoom). Hold the PS button for this menu."
         tip.font = .preferredFont(forTextStyle: .caption2)
         tip.textColor = .secondaryLabel
         tip.numberOfLines = 0
@@ -472,18 +487,57 @@ final class StreamMenuPanel: UIVisualEffectView {
         buttons.distribution = .fillEqually
         buttons.spacing = 8
 
+        // Custom mode: width, height, and where the crop happens.
+        func sliderRow(_ left: String, _ slider: UISlider, _ right: String, _ range: ClosedRange<Float>) -> UIStackView {
+            let l = UILabel(); l.text = left
+            let r = UILabel(); r.text = right
+            [l, r].forEach { $0.font = .preferredFont(forTextStyle: .caption1); $0.textColor = .secondaryLabel; $0.setContentHuggingPriority(.required, for: .horizontal) }
+            slider.minimumValue = range.lowerBound
+            slider.maximumValue = range.upperBound
+            slider.addTarget(self, action: #selector(changed), for: .valueChanged)
+            let row = UIStackView(arrangedSubviews: [l, slider, r])
+            row.spacing = 8
+            return row
+        }
+        let cr = Float(CustomFrame.range.lowerBound)...Float(CustomFrame.range.upperBound)
+        let lockLabel = UILabel()
+        lockLabel.text = "Keep proportions (zoom only)"
+        lockLabel.font = .preferredFont(forTextStyle: .footnote)
+        lockLabel.textColor = .white
+        cLock.addTarget(self, action: #selector(changed), for: .valueChanged)
+        customStack.axis = .vertical
+        customStack.spacing = 8
+        [sliderRow("Width", cWidth, "wider", cr),
+         sliderRow("Height", cHeight, "taller", cr),
+         UIStackView(arrangedSubviews: [lockLabel, cLock]),
+         sliderRow("Keep left", cX, "right", -1...1),
+         sliderRow("Keep top", cY, "bottom", -1...1)].forEach(customStack.addArrangedSubview)
+
         micButton.addTarget(self, action: #selector(mic), for: .touchUpInside)
         setMicState(false)
-        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, enhanceTitle, enhance, statsRow, micButton, tip, buttons])
+        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, customStack, enhanceTitle, enhance, statsRow, micButton, tip, buttons])
         stack.axis = .vertical
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stack)
+        // Scrolls when the panel is taller than a landscape iPhone screen.
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alwaysBounceVertical = false
+        contentView.addSubview(scroll)
+        scroll.addSubview(stack)
+        let fitHeight = scroll.heightAnchor.constraint(equalTo: stack.heightAnchor, constant: 32)
+        fitHeight.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
+            scroll.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: contentView.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            fitHeight,
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -16),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -32),
         ])
     }
 
@@ -493,8 +547,13 @@ final class StreamMenuPanel: UIVisualEffectView {
         settings = s
         mode.selectedSegmentIndex = ScreenMode.allCases.firstIndex(of: s.screenMode) ?? 1
         balance.value = Float(s.fillBalance)
-        balanceRow.alpha = s.screenMode == .fill ? 1 : 0.35
-        balance.isEnabled = s.screenMode == .fill
+        balanceRow.isHidden = s.screenMode != .fill
+        customStack.isHidden = s.screenMode != .custom
+        cWidth.value = Float(s.custom.width)
+        cHeight.value = Float(s.custom.height)
+        cLock.isOn = s.custom.lockAspect
+        cX.value = Float(s.custom.offsetX)
+        cY.value = Float(s.custom.offsetY)
         stats.isOn = s.showStats
         enhance.selectedSegmentIndex = EnhanceLevel.allCases.firstIndex(of: s.enhance) ?? 1
     }
@@ -502,6 +561,19 @@ final class StreamMenuPanel: UIVisualEffectView {
     @objc private func changed() {
         settings.screenMode = ScreenMode.allCases[max(0, mode.selectedSegmentIndex)]
         settings.fillBalance = Double(balance.value)
+        let old = settings.custom
+        var c = old
+        c.lockAspect = cLock.isOn
+        c.width = Double(cWidth.value)
+        c.height = Double(cHeight.value)
+        if c.lockAspect {
+            // Move both together by whichever slider the user touched.
+            if abs(c.width - old.width) > 0.0001 { c.height = min(CustomFrame.range.upperBound, max(CustomFrame.range.lowerBound, old.height * c.width / old.width)) }
+            else if abs(c.height - old.height) > 0.0001 { c.width = min(CustomFrame.range.upperBound, max(CustomFrame.range.lowerBound, old.width * c.height / old.height)) }
+        }
+        c.offsetX = Double(cX.value)
+        c.offsetY = Double(cY.value)
+        settings.custom = c
         settings.showStats = stats.isOn
         settings.enhance = EnhanceLevel.allCases[max(0, enhance.selectedSegmentIndex)]
         sync(settings)

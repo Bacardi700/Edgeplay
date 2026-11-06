@@ -45,7 +45,26 @@ enum ScreenMode: String, Codable, CaseIterable, Identifiable {
     /// Edge to edge. `fillBalance` decides how the extra width is found:
     /// 0 = all stretch (nothing cropped), 1 = all crop (no distortion).
     case fill = "Fill"
+    /// Your own width, height and position: stretch or crop on either axis, and pick
+    /// which side gets cropped (left/right, top/bottom).
+    case custom = "Custom"
     var id: String { rawValue }
+}
+
+/// Settings for Custom screen mode, relative to the fitted (undistorted) picture.
+struct CustomFrame: Codable, Equatable {
+    /// 1 = fitted width; above ~1.22 on a modern iPhone it overflows and crops left/right.
+    var width: Double = 1.22
+    /// 1 = full height; above 1 crops top/bottom.
+    var height: Double = 1.0
+    /// Keep width and height in step (zoom without stretching).
+    var lockAspect: Bool = false
+    /// -1 = keep the left edge (crop the right) … 0 = centre … 1 = keep the right edge.
+    var offsetX: Double = 0
+    /// -1 = keep the top (crop the bottom) … 0 = centre … 1 = keep the bottom.
+    var offsetY: Double = 0
+
+    static let range: ClosedRange<Double> = 1.0...1.6
 }
 
 enum EnhanceLevel: String, Codable, CaseIterable, Identifiable {
@@ -76,6 +95,7 @@ struct StreamSettings: Codable, Equatable {
     var screenMode: ScreenMode = .fill
     /// 0 = stretch only, 1 = crop only. 0.5 splits the difference.
     var fillBalance: Double = 0.5
+    var custom = CustomFrame()
     var showStats: Bool = true
     var rumble: Bool = true
     var lightbar: Bool = true
@@ -111,6 +131,7 @@ struct StreamSettings: Codable, Equatable {
         highRefresh = v(.highRefresh, d.highRefresh)
         screenMode = v(.screenMode, d.screenMode)
         fillBalance = v(.fillBalance, d.fillBalance)
+        custom = v(.custom, d.custom)
         showStats = v(.showStats, d.showStats)
         rumble = v(.rumble, d.rumble)
         lightbar = v(.lightbar, d.lightbar)
@@ -169,13 +190,23 @@ struct EffectiveQuality: Equatable {
 enum ScreenGeometry {
     /// Frame for the video layer inside `bounds` for a picture of aspect `videoAspect`.
     /// Anything outside `bounds` is clipped (that is the "crop").
+    /// Custom mode: scale the fitted picture independently in X and Y, then position it.
+    static func customFrame(in bounds: CGRect, videoAspect: CGFloat, custom c: CustomFrame) -> CGRect {
+        let fit = videoFrame(in: bounds, videoAspect: videoAspect, mode: .fit, balance: 0)
+        let w = fit.width * CGFloat(c.width)
+        let h = fit.height * CGFloat(c.height)
+        let x = bounds.minX + (bounds.width - w) * CGFloat(0.5 + 0.5 * c.offsetX)
+        let y = bounds.minY + (bounds.height - h) * CGFloat(0.5 + 0.5 * c.offsetY)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
     static func videoFrame(in bounds: CGRect, videoAspect: CGFloat, mode: ScreenMode, balance: Double) -> CGRect {
         guard bounds.width > 0, bounds.height > 0, videoAspect > 0 else { return bounds }
         let W = bounds.width, H = bounds.height
         let screenAspect = W / H
 
         switch mode {
-        case .fit:
+        case .fit, .custom:
             if screenAspect > videoAspect {
                 let w = H * videoAspect
                 return CGRect(x: bounds.minX + (W - w) / 2, y: bounds.minY, width: w, height: H)

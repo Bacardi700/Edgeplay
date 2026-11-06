@@ -14,6 +14,9 @@ struct SettingsView: View {
                         ForEach(ScreenMode.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    if store.settings.screenMode == .custom {
+                        CustomFrameControls(custom: $store.settings.custom)
+                    }
                     if store.settings.screenMode == .fill {
                         VStack(alignment: .leading) {
                             Slider(value: $store.settings.fillBalance, in: 0...1) {
@@ -153,5 +156,45 @@ private struct ScreenPreview: View {
                     .position(x: g.size.width / 2, y: g.size.height / 2)
             }
         }
+    }
+}
+
+/// Width / height / position sliders for Custom screen mode.
+private struct CustomFrameControls: View {
+    @Binding var custom: CustomFrame
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row("Width", value: Binding(get: { custom.width }, set: { setWidth($0) }), range: CustomFrame.range, left: "fitted", right: "wider")
+            row("Height", value: Binding(get: { custom.height }, set: { setHeight($0) }), range: CustomFrame.range, left: "full", right: "taller")
+            Toggle("Keep proportions (zoom only)", isOn: $custom.lockAspect)
+            row("Horizontal crop", value: $custom.offsetX, range: -1...1, left: "keep left", right: "keep right")
+            row("Vertical crop", value: $custom.offsetY, range: -1...1, left: "keep top", right: "keep bottom")
+            Text("Width past about 122% fills the screen and crops the sides; height past 100% crops top and bottom. The position sliders pick which side loses the crop.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func row(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, left: String, right: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.subheadline)
+            Slider(value: value, in: range) { Text(title) } minimumValueLabel: {
+                Text(left).font(.caption2)
+            } maximumValueLabel: {
+                Text(right).font(.caption2)
+            }
+        }
+    }
+
+    private func clamp(_ v: Double) -> Double { min(CustomFrame.range.upperBound, max(CustomFrame.range.lowerBound, v)) }
+
+    private func setWidth(_ w: Double) {
+        if custom.lockAspect, custom.width > 0 { custom.height = clamp(custom.height * w / custom.width) }
+        custom.width = w
+    }
+
+    private func setHeight(_ h: Double) {
+        if custom.lockAspect, custom.height > 0 { custom.width = clamp(custom.width * h / custom.height) }
+        custom.height = h
     }
 }
