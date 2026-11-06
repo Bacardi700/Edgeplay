@@ -93,7 +93,75 @@ final class AudioPlayer {
         }
     }
 
+    // MARK: microphone
+
+    private(set) var micOn = false
+    private var micConverter: AVAudioConverter?
+    private let micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48_000, channels: 2, interleaved: true)!
+    private var micAccum: [Int16] = []
+    private let micFrameSamples = 480 * 2   // 10 ms stereo, what chiaki's Opus encoder expects
+
+    /// Starts/stops capturing the iPhone mic. `onFrame` gets 480 stereo int16 frames at 48 kHz.
+    /// Uses voice processing so the game audio coming out of the speaker isn't sent back as echo.
+    @discardableResult
+    func setMic(_ on: Bool, onFrame: @escaping (UnsafePointer<Int16>) -> Void) -> Bool {
+        guard on != micOn else { return true }
+        let session = AVAudioSession.sharedInstance()
+        let input = engine.inputNode
+        engine.stop()
+        if on {
+            try? session.setCategory(.playAndRecord, mode: .default,
+                                     options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+            try? session.setActive(true)
+            try? input.setVoiceProcessingEnabled(true)
+            let inFormat = input.outputFormat(forBus: 0)
+            guard inFormat.sampleRate > 0, let conv = AVAudioConverter(from: inFormat, to: micFormat) else {
+                try? engine.start()
+                return false
+            }
+            micConverter = conv
+            micAccum.removeAll(keepingCapacity: true)
+            input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] buffer, _ in
+                self?.handleMic(buffer, onFrame)
+            }
+        } else {
+            input.removeTap(onBus: 0)
+            try? input.setVoiceProcessingEnabled(false)
+            try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+            micConverter = nil
+        }
+        micOn = on
+        try? engine.start()
+        return true
+    }
+
+    private func handleMic(_ buffer: AVAudioPCMBuffer, _ onFrame: (UnsafePointer<Int16>) -> Void) {
+        guard let conv = micConverter else { return }
+        let ratio = micFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 32)
+        guard let out = AVAudioPCMBuffer(pcmFormat: micFormat, frameCapacity: capacity) else { return }
+        var fed = false
+        var error: NSError?
+        conv.convert(to: out, error: &error) { _, status in
+            if fed { status.pointee = .noDataNow; return nil }
+            fed = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, let data = out.int16ChannelData else { return }
+        let count = Int(out.frameLength) * 2
+        micAccum.append(contentsOf: UnsafeBufferPointer(start: data[0], count: count))
+        while micAccum.count >= micFrameSamples {
+            micAccum.withUnsafeBufferPointer { onFrame($0.baseAddress!) }
+            micAccum.removeFirst(micFrameSamples)
+        }
+    }
+
     func stop() {
+        if micOn {
+            engine.inputNode.removeTap(onBus: 0)
+            micOn = false
+        }
         engine.stop()
         if let source { engine.detach(source) }
         source = nil

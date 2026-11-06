@@ -3,6 +3,7 @@
 import Foundation
 import CoreMedia
 import QuartzCore
+import AVFoundation
 
 /// Swift owner of one chiaki streaming session. All `on…` handlers are called on the main thread.
 final class StreamSession {
@@ -147,6 +148,30 @@ final class StreamSession {
     func sendPad(_ pad: inout RPPadState) {
         guard let h = handle else { return }
         _ = rp_session_set_pad(h, &pad)
+    }
+
+    /// Turns the mic on/off for party/game chat. Call after `.connected`.
+    func setMicrophone(_ on: Bool, completion: @escaping (Bool) -> Void) {
+        guard let h = handle else { completion(false); return }
+        let apply = { [weak self] in
+            guard let self, let h = self.handle else { completion(false); return }
+            if on {
+                let ok = self.audio.setMic(true) { pcm in rp_session_push_mic(h, pcm) }
+                completion(ok && rp_session_set_mic(h, true) == 0)
+            } else {
+                _ = rp_session_set_mic(h, false)
+                self.audio.setMic(false) { _ in }
+                completion(true)
+            }
+        }
+        _ = h
+        if on {
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                DispatchQueue.main.async { granted ? apply() : completion(false) }
+            }
+        } else {
+            apply()
+        }
     }
 
     func requestKeyframe() {

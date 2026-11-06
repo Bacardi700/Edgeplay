@@ -8,6 +8,9 @@
 #include <chiaki/discoveryservice.h>
 #include <chiaki/log.h>
 #include <chiaki/opusdecoder.h>
+#include <chiaki/opusencoder.h>
+#include <chiaki/orientation.h>
+#include <chiaki/time.h>
 #include <chiaki/regist.h>
 #include <chiaki/session.h>
 
@@ -44,6 +47,16 @@ struct RPSession {
     char *host;
     bool started;
     int32_t frames_lost_total;
+    // motion
+    ChiakiOrientationTracker orient;
+    ChiakiAccelNewZero accel_zero;
+    // microphone
+    ChiakiOpusEncoder opus_enc;
+    bool mic_connected;
+    volatile bool connected;
+    // haptics -> rumble
+    uint8_t last_rumble_l, last_rumble_r;
+    uint64_t last_rumble_ms;
 };
 
 static void session_log_cb(ChiakiLogLevel level, const char *msg, void *user)
@@ -60,6 +73,7 @@ static void session_event_cb(ChiakiEvent *ev, void *user)
         return;
     switch (ev->type) {
     case CHIAKI_EVENT_CONNECTED:
+        s->connected = true;
         s->cb.on_event(s->ctx, RP_EVENT_CONNECTED, 0, false, NULL);
         break;
     case CHIAKI_EVENT_QUIT:
@@ -92,6 +106,8 @@ static void session_event_cb(ChiakiEvent *ev, void *user)
 static void session_event_cb_outer(ChiakiEvent *ev, void *user)
 {
     RPSession *s = user;
+    if (ev->type == CHIAKI_EVENT_QUIT)
+        s->connected = false;
     if (ev->type == CHIAKI_EVENT_TRIGGER_EFFECTS) {
         if (s->cb.on_trigger_effects)
             s->cb.on_trigger_effects(s->ctx, ev->trigger_effects.type_left, ev->trigger_effects.left,
@@ -123,6 +139,44 @@ static void opus_frame_cb(int16_t *buf, size_t samples, void *user)
     RPSession *s = user;
     if (s->cb.on_audio_pcm)
         s->cb.on_audio_pcm(s->ctx, buf, samples);
+}
+
+/// PS5 sends DualSense haptics as a small audio stream (stereo int16, ~3 kHz) instead
+/// of rumble events. iOS can't play HD haptics on a DualSense, so turn its envelope into
+/// rumble strength per motor, like chiaki-ng does for non-DualSense pads.
+static void haptics_frame_cb(uint8_t *buf, size_t buf_size, void *user)
+{
+    RPSession *s = user;
+    if (!s->cb.on_event || buf_size < 4 || buf_size % 4 != 0)
+        return;
+    size_t n = buf_size / 4;
+    uint32_t suml = 0, sumr = 0;
+    for (size_t i = 0; i < n; i++) {
+        int16_t l, r;
+        memcpy(&l, buf + i * 4, 2);
+        memcpy(&r, buf + i * 4 + 2, 2);
+        suml += (uint32_t)abs(l) * 2;
+        sumr += (uint32_t)abs(r) * 2;
+    }
+    uint32_t avl = suml / n, avr = sumr / n;
+    if (avl < 100) avl = 0;      // same noise floor as chiaki-ng
+    if (avr < 100) avr = 0;
+    // Envelope is small compared to full scale; boost so real effects are felt.
+    uint32_t L = avl * 4 > 65535 ? 65535 : avl * 4;
+    uint32_t R = avr * 4 > 65535 ? 65535 : avr * 4;
+    uint8_t l8 = (uint8_t)(L >> 8), r8 = (uint8_t)(R >> 8);
+    uint64_t now = chiaki_time_now_monotonic_ms();
+    int dl = (int)l8 - s->last_rumble_l, dr = (int)r8 - s->last_rumble_r;
+    bool big_change = dl > 6 || dl < -6 || dr > 6 || dr < -6 || ((l8 | r8) == 0) != ((s->last_rumble_l | s->last_rumble_r) == 0);
+    if (!big_change && now - s->last_rumble_ms < 40)
+        return;
+    if (!big_change && l8 == s->last_rumble_l && r8 == s->last_rumble_r && now - s->last_rumble_ms < 80)
+        return;
+    s->last_rumble_l = l8;
+    s->last_rumble_r = r8;
+    s->last_rumble_ms = now;
+    // left = low-frequency motor, right = high-frequency motor
+    s->cb.on_event(s->ctx, RP_EVENT_RUMBLE, ((int32_t)l8 << 8) | r8, false, NULL);
 }
 
 RPSession *rp_session_create(const RPConnectConfig *cfg, RPCallbacks callbacks, void *ctx, const char **err_out)
@@ -186,6 +240,24 @@ RPSession *rp_session_create(const RPConnectConfig *cfg, RPCallbacks callbacks, 
     chiaki_opus_decoder_get_sink(&s->opus, &sink);
     chiaki_session_set_audio_sink(&s->session, &sink);
 
+    if (cfg->enable_dualsense) {
+        ChiakiAudioSink haptics;
+        memset(&haptics, 0, sizeof(haptics));
+        haptics.user = s;
+        haptics.frame_cb = haptics_frame_cb;
+        chiaki_session_set_haptics_sink(&s->session, &haptics);
+    }
+
+    // Motion
+    chiaki_orientation_tracker_init(&s->orient);
+    chiaki_accel_new_zero_set_inactive(&s->accel_zero, false);
+
+    // Microphone: 48 kHz stereo, 10 ms frames (what chiaki-ng uses).
+    chiaki_opus_encoder_init(&s->opus_enc, &s->log);
+    ChiakiAudioHeader mic_header;
+    chiaki_audio_header_set(&mic_header, 2, 16, RP_MIC_RATE, RP_MIC_FRAME_SAMPLES);
+    chiaki_opus_encoder_header(&mic_header, &s->opus_enc, &s->session);
+
     return s;
 }
 
@@ -216,6 +288,7 @@ void rp_session_free(RPSession *s)
     }
     chiaki_session_fini(&s->session);
     chiaki_opus_decoder_fini(&s->opus);
+    chiaki_opus_encoder_fini(&s->opus_enc);
     free(s->host);
     free(s);
 }
@@ -263,13 +336,37 @@ int rp_session_set_pad(RPSession *s, const RPPadState *p)
     }
 
     if (p->has_motion) {
-        st->gyro_x = p->gyro_x; st->gyro_y = p->gyro_y; st->gyro_z = p->gyro_z;
-        st->accel_x = p->accel_x; st->accel_y = p->accel_y; st->accel_z = p->accel_z;
-        st->orient_x = p->orient_x; st->orient_y = p->orient_y;
-        st->orient_z = p->orient_z; st->orient_w = p->orient_w;
+        // Same path chiaki-ng uses for SDL sensors: Madgwick filter -> orientation.
+        chiaki_orientation_tracker_update(&s->orient, p->gyro_x, p->gyro_y, p->gyro_z,
+                                          p->accel_x, p->accel_y, p->accel_z,
+                                          &s->accel_zero, false, p->motion_timestamp_us);
+        chiaki_orientation_tracker_apply_to_controller_state(&s->orient, st);
     }
 
     return (int)chiaki_session_set_controller_state(&s->session, st);
+}
+
+int rp_session_set_mic(RPSession *s, bool on)
+{
+    if (!s || !s->connected)
+        return -1;   // the control channel only exists once the stream is up
+    if (on && !s->mic_connected) {
+        ChiakiErrorCode err = chiaki_session_connect_microphone(&s->session);
+        if (err != CHIAKI_ERR_SUCCESS)
+            return (int)err;
+        s->mic_connected = true;
+    }
+    if (!s->mic_connected)
+        return 0;
+    // chiaki's flag reads "currently muted": true sends unmute.
+    return (int)chiaki_session_toggle_microphone(&s->session, on);
+}
+
+void rp_session_push_mic(RPSession *s, const int16_t *pcm)
+{
+    if (!s || !pcm || !s->mic_connected || !s->connected)
+        return;
+    chiaki_opus_encoder_frame((int16_t *)pcm, &s->opus_enc);
 }
 
 void rp_session_get_stats(RPSession *s, RPStats *out)

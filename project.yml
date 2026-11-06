@@ -71,6 +71,7 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        NSMicrophoneUsageDescription: EdgePlay sends your voice to the PlayStation for party and game chat when you turn the mic on.
         NSLocalNetworkUsageDescription: EdgePlay talks to your PlayStation on your network to check it's on, wake it and stream from it.
         GCSupportsControllerUserInteraction: true
         GCSupportedGameControllers:

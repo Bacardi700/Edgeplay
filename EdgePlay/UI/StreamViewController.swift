@@ -134,6 +134,7 @@ final class StreamViewController: UIViewController {
             switch event {
             case .connected:
                 connected = true
+                if settings.microphone { setMic(true) }
                 spinner.stopAnimating()
                 statusLabel.isHidden = true
                 updateHint()
@@ -155,7 +156,28 @@ final class StreamViewController: UIViewController {
         }
     }
 
+    private var micOn = false
+
+    private func setMic(_ on: Bool) {
+        session.setMicrophone(on) { [weak self] ok in
+            guard let self else { return }
+            micOn = on && ok
+            panel.setMicState(micOn)
+            if on && !ok {
+                let a = UIAlertController(title: "Microphone unavailable",
+                                          message: "Allow microphone access for EdgePlay in iPhone Settings, then try again.",
+                                          preferredStyle: .alert)
+                a.addAction(UIAlertAction(title: "OK", style: .default))
+                present(a, animated: true)
+            }
+        }
+    }
+
     private func wireInput() {
+        input.motionEnabled = settings.motion
+        input.invertHorizontal = settings.invertGyroHorizontal
+        input.invertVertical = settings.invertGyroVertical
+        input.phoneVibration = settings.phoneVibration
         input.onPad = { [weak self] pad in self?.session.sendPad(&pad) }
         input.onControllersChanged = { [weak self] _ in self?.updateHint() }
         input.onMenuRequested = { [weak self] in self?.toggleMenu() }
@@ -350,6 +372,11 @@ final class StreamViewController: UIViewController {
             self?.session.putConsoleToRest()
         }
         panel.onDisconnect = { [weak self] in self?.end(message: nil) }
+        panel.onMic = { [weak self] in
+            guard let self else { return }
+            setMic(!micOn)
+        }
+        panel.setMicState(micOn)
         panel.onClose = { [weak self] in self?.toggleMenu() }
         panel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(panel)
@@ -368,6 +395,17 @@ final class StreamMenuPanel: UIVisualEffectView {
     var onRest: (() -> Void)?
     var onDisconnect: (() -> Void)?
     var onClose: (() -> Void)?
+    var onMic: (() -> Void)?
+    private let micButton = UIButton(configuration: .tinted())
+
+    func setMicState(_ on: Bool) {
+        var c = micButton.configuration ?? .tinted()
+        c.title = on ? "Mic on" : "Mic off"
+        c.image = UIImage(systemName: on ? "mic.fill" : "mic.slash")
+        c.imagePadding = 6
+        c.baseForegroundColor = on ? .systemGreen : .white
+        micButton.configuration = c
+    }
 
     private var settings = StreamSettings()
     private let mode = UISegmentedControl(items: ScreenMode.allCases.map(\.rawValue))
@@ -434,7 +472,9 @@ final class StreamMenuPanel: UIVisualEffectView {
         buttons.distribution = .fillEqually
         buttons.spacing = 8
 
-        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, enhanceTitle, enhance, statsRow, tip, buttons])
+        micButton.addTarget(self, action: #selector(mic), for: .touchUpInside)
+        setMicState(false)
+        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, enhanceTitle, enhance, statsRow, micButton, tip, buttons])
         stack.axis = .vertical
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -469,6 +509,7 @@ final class StreamMenuPanel: UIVisualEffectView {
     }
 
     @objc private func rest() { onRest?() }
+    @objc private func mic() { onMic?() }
     @objc private func disconnect() { onDisconnect?() }
     @objc private func close() { onClose?() }
 }

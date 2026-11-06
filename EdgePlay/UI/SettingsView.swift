@@ -74,6 +74,13 @@ struct SettingsView: View {
                     Toggle("Show stream stats", isOn: $store.settings.showStats)
                     Toggle("Controller rumble", isOn: $store.settings.rumble)
                     Toggle("DualSense lightbar", isOn: $store.settings.lightbar)
+                    Toggle("Motion controls (gyro)", isOn: $store.settings.motion)
+                    if store.settings.motion {
+                        Toggle("Invert gyro horizontal", isOn: $store.settings.invertGyroHorizontal)
+                        Toggle("Invert gyro vertical", isOn: $store.settings.invertGyroVertical)
+                    }
+                    Toggle("Vibrate iPhone if controller can't", isOn: $store.settings.phoneVibration)
+                    Toggle("Microphone on at start", isOn: $store.settings.microphone)
                     Toggle("Adaptive triggers", isOn: $store.settings.adaptiveTriggers)
                     if store.settings.adaptiveTriggers {
                         HStack {

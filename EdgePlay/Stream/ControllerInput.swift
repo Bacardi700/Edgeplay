@@ -22,6 +22,14 @@ final class ControllerInput {
 
     var hasController: Bool { controller != nil }
 
+    // Motion
+    var motionEnabled = true { didSet { updateMotionActivation() } }
+    var invertHorizontal = false
+    var invertVertical = false
+    // Rumble
+    var phoneVibration = true
+    private var lastRumbleAt: TimeInterval = 0
+
     func start() {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] _ in self?.pickController() })
@@ -29,11 +37,46 @@ final class ControllerInput {
         GCController.startWirelessControllerDiscovery {}
         pickController()
         // Poll as well as react to changes so held sticks keep flowing at a steady rate.
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in self?.send() }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in self?.send(); self?.decayRumble() }
+    }
+
+    private func updateMotionActivation() {
+        guard let m = controller?.motion else { return }
+        if m.sensorsRequireManualActivation { m.sensorsActive = motionEnabled }
+        if motionEnabled {
+            m.valueChangedHandler = { [weak self] _ in self?.send() }
+        } else {
+            m.valueChangedHandler = nil
+        }
+    }
+
+    /// GameController reports motion as +X right, +Y forward (away from you), +Z up out of
+    /// the face, with gravity pointing down. The console expects the DualSense/SDL frame:
+    /// +X right, +Y up, +Z toward you, and accelerometer reading +1 g up at rest.
+    private func fillMotion(_ p: inout RPPadState) {
+        guard motionEnabled, let m = controller?.motion, m.hasRotationRate else { return }
+        let r = m.rotationRate
+        var a: GCAcceleration
+        if m.hasGravityAndUserAcceleration {
+            a = GCAcceleration(x: m.gravity.x + m.userAcceleration.x,
+                               y: m.gravity.y + m.userAcceleration.y,
+                               z: m.gravity.z + m.userAcceleration.z)
+        } else {
+            a = m.acceleration
+        }
+        p.has_motion = true
+        p.gyro_x = Float(r.x) * (invertVertical ? -1 : 1)          // pitch
+        p.gyro_y = Float(r.z) * (invertHorizontal ? -1 : 1)        // yaw
+        p.gyro_z = Float(-r.y)                                     // roll
+        p.accel_x = Float(-a.x)
+        p.accel_y = Float(-a.z)
+        p.accel_z = Float(a.y)
+        p.motion_timestamp_us = UInt32(truncatingIfNeeded: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000))
     }
 
     func stop() {
         clearTriggers()
+
         pollTimer?.invalidate()
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         observers.removeAll()
@@ -52,6 +95,7 @@ final class ControllerInput {
             g.buttonMenu.preferredSystemGestureState = .disabled
             g.valueChangedHandler = { [weak self] _, _ in self?.send() }
         }
+        updateMotionActivation()
         setupHaptics()
         lastTriggers = (.off, .off)
         onControllersChanged?(pad != nil)
@@ -114,7 +158,16 @@ final class ControllerInput {
         }
 
         p.buttons = b
+        fillMotion(&p)
         onPad?(&p)
+    }
+
+    /// Stops rumbling once the console stops sending haptics.
+    private func decayRumble() {
+        if hapticPlayer != nil, ProcessInfo.processInfo.systemUptime - lastRumbleAt > 0.15 {
+            try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)
+            hapticPlayer = nil
+        }
     }
 
     private func axis(_ v: Float) -> Int16 {
@@ -161,7 +214,16 @@ final class ControllerInput {
         hapticEngine?.stop()
         hapticEngine = nil
         hapticPlayer = nil
-        guard let engine = controller?.haptics?.createEngine(withLocality: .default) else { return }
+        let engine: CHHapticEngine?
+        if let pad = controller?.haptics?.createEngine(withLocality: .default) {
+            engine = pad
+        } else if phoneVibration, CHHapticEngine.capabilitiesForHardware().supportsHaptics {
+            // No motors in the controller (or no controller): use the iPhone's Taptic Engine.
+            engine = try? CHHapticEngine()
+        } else {
+            engine = nil
+        }
+        guard let engine else { return }
         engine.isAutoShutdownEnabled = false
         engine.resetHandler = { [weak engine] in try? engine?.start() }
         try? engine.start()
@@ -169,7 +231,9 @@ final class ControllerInput {
     }
 
     func rumble(left: UInt8, right: UInt8) {
+        if hapticEngine == nil { setupHaptics() }
         guard let engine = hapticEngine else { return }
+        lastRumbleAt = ProcessInfo.processInfo.systemUptime
         let strength = Float(max(left, right)) / 255
         if strength <= 0.01 {
             try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)

@@ -82,6 +82,14 @@ struct StreamSettings: Codable, Equatable {
     var adaptiveTriggers: Bool = true
     /// 0...1 multiplier for trigger resistance/vibration.
     var triggerStrength: Double = 1.0
+    /// Send the DualSense's gyro/accelerometer (gyro aiming, motion controls).
+    var motion: Bool = true
+    var invertGyroHorizontal: Bool = false
+    var invertGyroVertical: Bool = false
+    /// Turn the iPhone mic on when a stream starts (party/game chat).
+    var microphone: Bool = false
+    /// Vibrate the iPhone when the controller has no rumble motors (e.g. Backbone).
+    var phoneVibration: Bool = true
 
     init() {}
 
@@ -108,6 +116,11 @@ struct StreamSettings: Codable, Equatable {
         lightbar = v(.lightbar, d.lightbar)
         adaptiveTriggers = v(.adaptiveTriggers, d.adaptiveTriggers)
         triggerStrength = v(.triggerStrength, d.triggerStrength)
+        motion = v(.motion, d.motion)
+        invertGyroHorizontal = v(.invertGyroHorizontal, d.invertGyroHorizontal)
+        invertGyroVertical = v(.invertGyroVertical, d.invertGyroVertical)
+        microphone = v(.microphone, d.microphone)
+        phoneVibration = v(.phoneVibration, d.phoneVibration)
     }
 
     struct BitratePreset: Identifiable {

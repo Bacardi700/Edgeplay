@@ -110,14 +110,25 @@ typedef struct {
     // Up to two touchpad fingers, coordinates in the 1920x942 touchpad space.
     bool touch_active[2];
     uint16_t touch_x[2], touch_y[2];
-    // Motion (optional). Gyro rad/s, accel in g, orientation quaternion.
+    // Motion (optional), in the DualSense/SDL convention: +X right, +Y up out of the
+    // face, +Z toward the player. Gyro in rad/s, accel in g (about +1 on Y at rest).
+    // The bridge derives the orientation quaternion the console wants.
     bool has_motion;
     float gyro_x, gyro_y, gyro_z;
     float accel_x, accel_y, accel_z;
-    float orient_x, orient_y, orient_z, orient_w;
+    uint32_t motion_timestamp_us;
 } RPPadState;
 
 int rp_session_set_pad(RPSession *s, const RPPadState *pad);
+
+// Microphone ---------------------------------------------------------------
+
+/// Turns the console's mic input on or off (connects it the first time).
+int rp_session_set_mic(RPSession *s, bool on);
+/// Mic audio: 48 kHz, stereo, interleaved int16, exactly RP_MIC_FRAME_SAMPLES frames per call.
+#define RP_MIC_FRAME_SAMPLES 480
+#define RP_MIC_RATE 48000
+void rp_session_push_mic(RPSession *s, const int16_t *pcm);
 
 // Stats --------------------------------------------------------------------
 
