@@ -58,7 +58,7 @@ and you can register 10 app IDs a week. A paid developer account ($99/yr) makes 
 
 ## Build it yourself on a Mac (optional)
 
-Needs Xcode 15+, `brew install cmake ninja pkg-config autoconf automake libtool xcodegen` and
+Needs Xcode 15+, `brew install cmake ninja pkg-config autoconf automake libtool xcodegen protobuf` and
 `python3 -m pip install --user protobuf grpcio-tools`.
 
 ```bash

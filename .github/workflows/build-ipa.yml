@@ -27,7 +27,7 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install cmake ninja pkg-config autoconf automake libtool xcodegen
+          brew install cmake ninja pkg-config autoconf automake libtool xcodegen protobuf
           python -m pip install protobuf grpcio-tools
 
       # chiaki-ng + OpenSSL etc. take ~15 min; reuse them until the build script changes.

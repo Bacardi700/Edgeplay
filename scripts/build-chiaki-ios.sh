@@ -5,7 +5,7 @@
 # miniupnpc and curl) for iOS and packages it as Frameworks/ChiakiCore.xcframework.
 #
 # Run on a Mac with Xcode installed:
-#   brew install cmake ninja pkg-config autoconf automake libtool
+#   brew install cmake ninja pkg-config autoconf automake libtool protobuf
 #   python3 -m pip install --user protobuf grpcio-tools
 #   ./scripts/build-chiaki-ios.sh            # device only (what you need to play)
 #   ./scripts/build-chiaki-ios.sh --simulator # also build an arm64 simulator slice
@@ -33,7 +33,7 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ preflight
 [[ "$(uname)" == "Darwin" ]] || die "This script must run on macOS with Xcode."
-for t in xcodebuild xcrun cmake ninja git pkg-config python3 libtool; do
+for t in xcodebuild xcrun cmake ninja git pkg-config python3 libtool protoc; do
   command -v "$t" >/dev/null || die "Missing '$t'. See the brew line at the top of this script."
 done
 python3 -c "import google.protobuf, grpc_tools" 2>/dev/null \
@@ -118,6 +118,7 @@ build_slice() { # triplet sysroot outdir
     -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF -DUSE_NGHTTP2=OFF -DCURL_DISABLE_LDAP=ON \
     -DPython3_EXECUTABLE="$(command -v python3)" \
     -DPYTHON_EXECUTABLE="$(command -v python3)" \
+    -DPROTOC="$(command -v protoc)" \
     -Wno-dev
 
   log "[$triplet] Compiling"
