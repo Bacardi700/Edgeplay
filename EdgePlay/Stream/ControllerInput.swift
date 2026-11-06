@@ -14,7 +14,7 @@ final class ControllerInput {
     private var controller: GCController?
     private var observers: [NSObjectProtocol] = []
     private var hapticEngine: CHHapticEngine?
-    private var hapticPlayer: CHHapticAdvancedPatternPlayer?
+    private var hapticPlayer: CHHapticPatternPlayer?
     private var homeDownAt: TimeInterval?
     private var menuFiredForPress = false
     private var psPulseUntil: TimeInterval = 0
@@ -228,40 +228,70 @@ final class ControllerInput {
         }
         guard let engine else { return }
         engine.isAutoShutdownEnabled = false
-        engine.resetHandler = { [weak engine] in try? engine?.start() }
-        try? engine.start()
+        engine.playsHapticsOnly = true
+        engine.resetHandler = { [weak self, weak engine] in
+            self?.engineRunning = (try? engine?.start()) != nil
+        }
+        engine.stoppedHandler = { [weak self] _ in self?.engineRunning = false }
+        engineRunning = (try? engine.start()) != nil
         hapticEngine = engine
     }
 
+    /// Last rumble strengths received from the console (0-255), for the stats overlay.
+    private(set) var lastRumble: (UInt8, UInt8) = (0, 0)
+    private var engineRunning = false
+
+    /// Plays rumble as short overlapping pulses. Simple continuous events are supported by
+    /// every controller haptics engine on iOS (dynamic parameter control isn't always).
     func rumble(left: UInt8, right: UInt8) {
-        if hapticEngine == nil { setupHaptics() }
+        lastRumble = (left, right)
+        if hapticEngine == nil || !engineRunning { setupHaptics() }
         guard let engine = hapticEngine else { return }
         lastRumbleAt = ProcessInfo.processInfo.systemUptime
         let strength = Float(max(left, right)) / 255
-        if strength <= 0.01 {
+        if strength <= 0.02 {
             try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)
             hapticPlayer = nil
             return
         }
-        // Low-frequency motor -> lower sharpness.
-        let sharpness: Float = right > left ? 0.6 : 0.2
-        if let player = hapticPlayer {
-            try? player.sendParameters([
-                CHHapticDynamicParameter(parameterID: .hapticIntensityControl, value: strength, relativeTime: 0),
-                CHHapticDynamicParameter(parameterID: .hapticSharpnessControl, value: sharpness - 0.4, relativeTime: 0),
-            ], atTime: CHHapticTimeImmediate)
-            return
-        }
+        // Low-frequency (left) motor feels better with low sharpness.
+        let sharpness: Float = right > left ? 0.7 : 0.25
         let event = CHHapticEvent(eventType: .hapticContinuous, parameters: [
-            CHHapticEventParameter(parameterID: .hapticIntensity, value: 1),
-            CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.4),
-        ], relativeTime: 0, duration: 30)
-        guard let pattern = try? CHHapticPattern(events: [event], parameters: []),
-              let player = try? engine.makeAdvancedPlayer(with: pattern) else { return }
-        player.loopEnabled = true
-        try? player.sendParameters([CHHapticDynamicParameter(parameterID: .hapticIntensityControl, value: strength, relativeTime: 0)],
-                                   atTime: CHHapticTimeImmediate)
-        try? player.start(atTime: CHHapticTimeImmediate)
-        hapticPlayer = player
+            CHHapticEventParameter(parameterID: .hapticIntensity, value: min(1, strength * 1.2)),
+            CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness),
+        ], relativeTime: 0, duration: 0.12)
+        do {
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+            try? hapticPlayer?.stop(atTime: CHHapticTimeImmediate)
+            try player.start(atTime: CHHapticTimeImmediate)
+            hapticPlayer = player
+        } catch {
+            engineRunning = false   // engine was stopped (e.g. backgrounded); rebuild next time
+        }
+    }
+
+    /// Plays a half-second buzz on the connected controller (or the iPhone). Returns a short
+    /// description of what happened, for the Settings test button.
+    static func testVibration() -> String {
+        guard let controller = GCController.current ?? GCController.controllers().first else {
+            return "No controller connected."
+        }
+        guard let engine = controller.haptics?.createEngine(withLocality: .default) else {
+            return "\(controller.vendorName ?? "This controller") doesn't offer vibration to apps on iOS."
+        }
+        do {
+            try engine.start()
+            let event = CHHapticEvent(eventType: .hapticContinuous, parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 1),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.3),
+            ], relativeTime: 0, duration: 0.5)
+            let player = try engine.makePlayer(with: CHHapticPattern(events: [event], parameters: []))
+            try player.start(atTime: CHHapticTimeImmediate)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { engine.stop() }
+            return "Sent a vibration to \(controller.vendorName ?? "the controller")."
+        } catch {
+            return "Vibration failed: \(error.localizedDescription)"
+        }
     }
 }

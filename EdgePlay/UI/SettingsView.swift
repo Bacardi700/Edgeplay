@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var store: ConsoleStore
     @Environment(\.dismiss) private var dismiss
+    @State private var vibrationResult: String?
 
     var body: some View {
         NavigationStack {
@@ -83,6 +84,10 @@ struct SettingsView: View {
                         Toggle("Invert gyro vertical", isOn: $store.settings.invertGyroVertical)
                     }
                     Toggle("Vibrate iPhone if controller can't", isOn: $store.settings.phoneVibration)
+                    Button("Test vibration") { vibrationResult = ControllerInput.testVibration() }
+                    if let vibrationResult {
+                        Text(vibrationResult).font(.footnote).foregroundStyle(.secondary)
+                    }
                     Toggle("Microphone on at start", isOn: $store.settings.microphone)
                     Toggle("Adaptive triggers", isOn: $store.settings.adaptiveTriggers)
                     if store.settings.adaptiveTriggers {

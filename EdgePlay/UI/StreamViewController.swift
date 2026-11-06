@@ -18,6 +18,7 @@ final class StreamViewController: UIViewController {
     private let menuButton = UIButton(type: .system)
     private let hintLabel = PaddedLabel()
     private let netBadge = PaddedLabel()
+    private let micBadge = UIImageView(image: UIImage(systemName: "mic.fill"))
     private var poorSeconds = 0
     private lazy var panel = StreamMenuPanel()
     private var statsTimer: Timer?
@@ -166,6 +167,7 @@ final class StreamViewController: UIViewController {
             guard let self else { return }
             micOn = on && ok
             panel.setMicState(micOn)
+            micBadge.isHidden = !micOn
             if on && !ok {
                 let a = UIAlertController(title: "Microphone unavailable",
                                           message: "Allow microphone access for EdgePlay in iPhone Settings, then try again.",
@@ -251,6 +253,21 @@ final class StreamViewController: UIViewController {
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(hintLabel)
 
+        micBadge.tintColor = .systemGreen
+        micBadge.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        micBadge.contentMode = .center
+        micBadge.layer.cornerRadius = 14
+        micBadge.clipsToBounds = true
+        micBadge.isHidden = true
+        micBadge.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(micBadge)
+        NSLayoutConstraint.activate([
+            micBadge.widthAnchor.constraint(equalToConstant: 28),
+            micBadge.heightAnchor.constraint(equalToConstant: 28),
+            micBadge.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -56),
+            micBadge.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
+        ])
+
         netBadge.text = "Weak connection · lower the bitrate or move closer to Wi-Fi"
         netBadge.font = .preferredFont(forTextStyle: .caption1)
         netBadge.textColor = .white
@@ -313,9 +330,10 @@ final class StreamViewController: UIViewController {
         let res = s.resolution.map { "\($0.height)p" } ?? q.resolution.rawValue
         let codec = q.hdr ? "HEVC HDR" : (q.hevc ? "HEVC" : "H.264")
         let enhance = session.video.renderer == nil ? "basic" : settings.enhance.rawValue.lowercased()
-        statsLabel.text = String(format: "%@ · %@ · %.0f fps · %@\n%.1f/%d Mb/s · RTT %.0f ms · %@\nloss %.1f%% · dropped %d · enhance %@",
+        let rum = input.lastRumble
+        statsLabel.text = String(format: "%@ · %@ · %.0f fps · %@\n%.1f/%d Mb/s · RTT %.0f ms · %@\nloss %.1f%% · dropped %d · enhance %@\nrumble %d/%d · %@",
                                  res, codec, s.fps, q.label, s.receivedMbps, Int(q.bitrateKbps / 1000), s.rttMs, health,
-                                 s.packetLoss * 100, s.framesLost, enhance)
+                                 s.packetLoss * 100, s.framesLost, enhance, Int(rum.0), Int(rum.1), micOn ? "mic on" : "mic off")
     }
 
     // MARK: gestures & menu
