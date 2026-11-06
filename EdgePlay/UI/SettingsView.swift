@@ -30,7 +30,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Screen")
                 } footer: {
-                    Text("Smart works like YouTube and Netflix: the picture is never stretched or cropped, the sides glow with the game's colours, and black bars in cinematic scenes are trimmed so those fill the screen. Fill uses every pixel for the game; slide toward Stretch or Crop to pick the trade-off. Fit is Sony's app.")
+                    Text("Fill uses the whole screen, notch area included. Slide toward Stretch to keep everything visible (slightly wider picture) or toward Crop to keep proportions (top and bottom edges trimmed). You can also pinch during play.")
                 }
 
                 Section {

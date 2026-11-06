@@ -17,23 +17,6 @@ final class MetalVideoRenderer {
 
     var sharpness: Float = 0.35
     var useMetalFX = true
-    /// Smart mode: glow of the picture's colours in the unused screen area (YouTube "Ambient").
-    var ambient = false
-    var glowStrength: Float = 0.55
-    /// Where the picture sits inside the layer, in 0...1 layer coordinates.
-    var contentRect = CGRect(x: 0, y: 0, width: 1, height: 1)
-    /// Called on the main thread when detected black bars change (top, bottom as fractions of height).
-    var onCropChanged: ((Float, Float) -> Void)?
-
-    private var cropTop: Float = 0, cropBottom: Float = 0
-    private let detector = LetterboxDetector()
-    /// Trim detected black bars (cinematic games/cutscenes), Netflix-style.
-    var trimBlackBars = false {
-        didSet {
-            lock.lock(); trimBlackBarsValue = trimBlackBars; lock.unlock()
-            if !trimBlackBars { detector.reset(); setCrop(0, 0) }
-        }
-    }
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -122,38 +105,11 @@ final class MetalVideoRenderer {
 
     /// Called from the decoder thread with each new frame; the newest one wins.
     func submit(_ pixelBuffer: CVPixelBuffer) {
-        lock.lock()
-        pending = pixelBuffer
-        let trim = trimBlackBarsFlag
-        lock.unlock()
-        if trim, let bars = detector.feed(pixelBuffer) {
-            setCrop(bars.top, bars.bottom)
-        }
-    }
-
-    private var trimBlackBarsFlag: Bool { trimBlackBarsValue }
-    private var trimBlackBarsValue = false
-
-    private func setCrop(_ top: Float, _ bottom: Float) {
-        lock.lock()
-        let changed = abs(top - cropTop) > 0.001 || abs(bottom - cropBottom) > 0.001
-        cropTop = top; cropBottom = bottom
-        lock.unlock()
-        if changed {
-            DispatchQueue.main.async { [weak self] in self?.onCropChanged?(top, bottom) }
-        }
-    }
-
-    /// Picture aspect after black-bar trimming, for layout.
-    func effectiveAspect(videoWidth: CGFloat, videoHeight: CGFloat) -> CGFloat {
-        lock.lock(); let t = cropTop, b = cropBottom; lock.unlock()
-        let h = videoHeight * CGFloat(max(0.2, 1 - t - b))
-        return videoWidth / max(h, 1)
+        lock.lock(); pending = pixelBuffer; lock.unlock()
     }
 
     func flush() {
         lock.lock(); pending = nil; lock.unlock()
-        detector.reset()
         if let cache = textureCache { CVMetalTextureCacheFlush(cache, 0) }
     }
 
@@ -178,13 +134,9 @@ final class MetalVideoRenderer {
               let drawable = layer.nextDrawable(),
               let cmd = queue.makeCommandBuffer() else { return }
 
-        // 1. YCbCr -> RGB at the stream's resolution, minus any trimmed black bars.
-        lock.lock(); let top = cropTop, bottom = cropBottom; lock.unlock()
-        let keepH = max(0.2, 1 - top - bottom)
-        let cw = w, ch = max(2, Int((Float(h) * keepH).rounded()))
-        let rgb = texture(&rgbTexture, width: cw, height: ch, mipmapped: ambient)
+        // 1. YCbCr -> RGB at the stream's resolution.
+        let rgb = texture(&rgbTexture, width: w, height: h)
         var params = Self.convertParams(for: pb)
-        params.crop = SIMD4<Float>(0, top, 1, keepH)
         let rp1 = MTLRenderPassDescriptor()
         rp1.colorAttachments[0].texture = rgb
         rp1.colorAttachments[0].loadAction = .dontCare
@@ -197,27 +149,16 @@ final class MetalVideoRenderer {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
         }
-        // Blurred copies for the ambient glow.
-        if ambient, rgb.mipmapLevelCount > 1, let blit = cmd.makeBlitCommandEncoder() {
-            blit.generateMipmaps(for: rgb)
-            blit.endEncoding()
-        }
 
-        // 2. MetalFX upscale to the picture's real on-screen pixel size, when it helps.
-        let rect = contentRect
-        let outW = max(1, Int((CGFloat(drawable.texture.width) * rect.width).rounded()))
-        let outH = max(1, Int((CGFloat(drawable.texture.height) * rect.height).rounded()))
+        // 2. MetalFX upscale to the drawable's real pixel size, when it helps.
+        let outW = drawable.texture.width, outH = drawable.texture.height
         var source: MTLTexture = rgb
-        if useMetalFX, sharpness > 0, outW > cw || outH > ch, let up = upscale(rgb, cw, ch, outW, outH, cmd) {
+        if useMetalFX, sharpness > 0, outW > w || outH > h, let up = upscale(rgb, w, h, outW, outH, cmd) {
             source = up
         }
 
-        // 3. Sharpen, place on screen, glow around it.
-        let glowLevel = Float(max(0, rgb.mipmapLevelCount - 4))   // ~8-16 px wide: very soft
-        var pp = PresentParams(texel: SIMD2(1 / Float(source.width), 1 / Float(source.height)),
-                               sharpness: sharpness, ambient: ambient ? 1 : 0,
-                               contentRect: SIMD4(Float(rect.minX), Float(rect.minY), Float(rect.width), Float(rect.height)),
-                               glowLevel: glowLevel, glowStrength: glowStrength, pad: .zero)
+        // 3. Sharpen + final scale to the screen.
+        var pp = PresentParams(texel: SIMD2(1 / Float(source.width), 1 / Float(source.height)), sharpness: sharpness, pad: 0)
         let rp2 = MTLRenderPassDescriptor()
         rp2.colorAttachments[0].texture = drawable.texture
         rp2.colorAttachments[0].loadAction = .dontCare
@@ -225,7 +166,6 @@ final class MetalVideoRenderer {
         if let enc = cmd.makeRenderCommandEncoder(descriptor: rp2) {
             enc.setRenderPipelineState(presentPipeline)
             enc.setFragmentTexture(source, index: 0)
-            enc.setFragmentTexture(rgb, index: 1)
             enc.setFragmentBytes(&pp, length: MemoryLayout<PresentParams>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
@@ -269,9 +209,9 @@ final class MetalVideoRenderer {
         return out
     }
 
-    private func texture(_ slot: inout MTLTexture?, width: Int, height: Int, mipmapped: Bool) -> MTLTexture {
-        if let t = slot, t.width == width, t.height == height, (t.mipmapLevelCount > 1) == mipmapped { return t }
-        let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: intermediateFormat, width: width, height: height, mipmapped: mipmapped)
+    private func texture(_ slot: inout MTLTexture?, width: Int, height: Int) -> MTLTexture {
+        if let t = slot, t.width == width, t.height == height { return t }
+        let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: intermediateFormat, width: width, height: height, mipmapped: false)
         td.usage = [.renderTarget, .shaderRead]
         td.storageMode = .private
         let t = device.makeTexture(descriptor: td)!
@@ -292,18 +232,12 @@ final class MetalVideoRenderer {
     struct ConvertParams {
         var row0: SIMD4<Float>, row1: SIMD4<Float>, row2: SIMD4<Float>
         var range: SIMD4<Float>
-        var crop: SIMD4<Float> = SIMD4(0, 0, 1, 1)
     }
 
-    /// Must match PresentParams in Shaders.metal (48 bytes).
     struct PresentParams {
         var texel: SIMD2<Float>
         var sharpness: Float
-        var ambient: Float
-        var contentRect: SIMD4<Float>
-        var glowLevel: Float
-        var glowStrength: Float
-        var pad: SIMD2<Float>
+        var pad: Float
     }
 
     /// Video-range YCbCr -> R'G'B', BT.709 or BT.2020 depending on the stream.

@@ -40,10 +40,6 @@ enum VideoCodec: String, Codable, CaseIterable, Identifiable {
 
 /// How the 16:9 picture is fitted to a ~19.5:9 iPhone screen.
 enum ScreenMode: String, Codable, CaseIterable, Identifiable {
-    /// Like YouTube and Netflix on a wide phone: the picture is never stretched or
-    /// cropped; spare screen is filled with a soft glow of the picture's own colours,
-    /// and black letterbox bars baked into the video are trimmed automatically.
-    case smart = "Smart"
     /// Whole picture, black bars at the sides (what Sony's app does).
     case fit = "Fit"
     /// Edge to edge. `fillBalance` decides how the extra width is found:
@@ -77,7 +73,7 @@ struct StreamSettings: Codable, Equatable {
     var enhance: EnhanceLevel = .balanced
     /// Present frames on a 120 Hz display link on ProMotion iPhones (less judder).
     var highRefresh: Bool = true
-    var screenMode: ScreenMode = .smart
+    var screenMode: ScreenMode = .fill
     /// 0 = stretch only, 1 = crop only. 0.5 splits the difference.
     var fillBalance: Double = 0.5
     var showStats: Bool = true
@@ -166,7 +162,7 @@ enum ScreenGeometry {
         let screenAspect = W / H
 
         switch mode {
-        case .fit, .smart:
+        case .fit:
             if screenAspect > videoAspect {
                 let w = H * videoAspect
                 return CGRect(x: bounds.minX + (W - w) / 2, y: bounds.minY, width: w, height: H)
