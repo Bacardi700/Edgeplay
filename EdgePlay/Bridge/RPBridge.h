@@ -140,7 +140,8 @@ typedef struct {
     uint8_t mac[6];
 } RPRegisteredHost;
 
-typedef void (*RPRegistCallback)(void *ctx, bool success, const RPRegisteredHost *host);
+/// error: chiaki's last error message when linking failed (may be NULL).
+typedef void (*RPRegistCallback)(void *ctx, bool success, const RPRegisteredHost *host, const char *error);
 
 typedef struct RPRegist RPRegist;
 

@@ -73,16 +73,16 @@ final class Pairing {
     }
 
     private var handle: OpaquePointer?
-    private let completion: (Result?) -> Void
+    private let completion: (Result?, String?) -> Void
 
-    /// `completion` runs on the main thread exactly once.
-    init?(host: String, ps5: Bool, accountID: Data, pin: UInt32, completion: @escaping (Result?) -> Void) {
+    /// `completion` runs on the main thread exactly once, with the result or chiaki's error message.
+    init?(host: String, ps5: Bool, accountID: Data, pin: UInt32, completion: @escaping (Result?, String?) -> Void) {
         guard accountID.count == 8 else { return nil }
         self.completion = completion
         let ctx = Unmanaged.passRetained(self).toOpaque()   // released in the callback
         var id = [UInt8](accountID)
         let h = host.withCString { hostPtr in
-            rp_regist_start(hostPtr, ps5, &id, pin, { ctx, ok, host in
+            rp_regist_start(hostPtr, ps5, &id, pin, { ctx, ok, host, error in
                 let me = Unmanaged<Pairing>.fromOpaque(ctx!).takeRetainedValue()
                 var result: Result?
                 if ok, let h = host?.pointee {
@@ -92,7 +92,8 @@ final class Pairing {
                                     morning: dataFromTuple(h.morning),
                                     mac: dataFromTuple(h.mac))
                 }
-                DispatchQueue.main.async { me.completion(result) }
+                let message = error.map { String(cString: $0) }
+                DispatchQueue.main.async { me.completion(result, message) }
                 // Free on another thread: rp_regist_free joins the thread we're on.
                 DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { me.free() }
             }, ctx)

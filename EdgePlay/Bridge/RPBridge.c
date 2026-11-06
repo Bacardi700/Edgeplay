@@ -15,12 +15,18 @@
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <stdio.h>
 #include <sys/socket.h>
 
 static ChiakiLog g_log;
 
 int rp_global_init(void)
 {
+    // A send() on a socket the console has closed raises SIGPIPE, which silently
+    // kills an iOS app. chiaki doesn't guard against it, so ignore it process-wide
+    // and let the failed send return an error instead.
+    signal(SIGPIPE, SIG_IGN);
     chiaki_log_init(&g_log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING | CHIAKI_LOG_INFO, chiaki_log_cb_print, NULL);
     return chiaki_lib_init() == CHIAKI_ERR_SUCCESS ? 0 : -1;
 }
@@ -288,7 +294,16 @@ struct RPRegist {
     RPRegistCallback cb;
     void *ctx;
     bool started;
+    char last_error[256];
 };
+
+static void regist_log_cb(ChiakiLogLevel level, const char *msg, void *user)
+{
+    RPRegist *r = user;
+    if (level == CHIAKI_LOG_ERROR && msg)
+        snprintf(r->last_error, sizeof(r->last_error), "%s", msg);
+    chiaki_log_cb_print(level, msg, NULL);
+}
 
 static void regist_cb(ChiakiRegistEvent *ev, void *user)
 {
@@ -296,7 +311,9 @@ static void regist_cb(ChiakiRegistEvent *ev, void *user)
     if (!r->cb)
         return;
     if (ev->type != CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS || !ev->registered_host) {
-        r->cb(r->ctx, false, NULL);
+        const char *why = ev->type == CHIAKI_REGIST_EVENT_TYPE_FINISHED_CANCELED ? "Cancelled"
+                        : (r->last_error[0] ? r->last_error : NULL);
+        r->cb(r->ctx, false, NULL, why);
         return;
     }
     ChiakiRegisteredHost *h = ev->registered_host;
@@ -308,7 +325,7 @@ static void regist_cb(ChiakiRegistEvent *ev, void *user)
     memcpy(out.regist_key, h->rp_regist_key, RP_KEY_SIZE);
     memcpy(out.morning, h->rp_key, RP_KEY_SIZE);
     memcpy(out.mac, h->server_mac, sizeof(out.mac));
-    r->cb(r->ctx, true, &out);
+    r->cb(r->ctx, true, &out, NULL);
 }
 
 RPRegist *rp_regist_start(const char *host, bool ps5, const uint8_t account_id[RP_ACCOUNT_ID_SIZE],
@@ -321,7 +338,7 @@ RPRegist *rp_regist_start(const char *host, bool ps5, const uint8_t account_id[R
         return NULL;
     r->cb = cb;
     r->ctx = ctx;
-    chiaki_log_init(&r->log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING | CHIAKI_LOG_INFO, chiaki_log_cb_print, NULL);
+    chiaki_log_init(&r->log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING | CHIAKI_LOG_INFO, regist_log_cb, r);
 
     ChiakiRegistInfo info;
     memset(&info, 0, sizeof(info));

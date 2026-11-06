@@ -110,10 +110,10 @@ struct AddConsoleView: View {
         let remote = remoteHost.trimmingCharacters(in: .whitespaces)
         let wantPS5 = ps5
 
-        pairing = Pairing(host: host, ps5: wantPS5, accountID: id, pin: pinValue) { result in
+        pairing = Pairing(host: host, ps5: wantPS5, accountID: id, pin: pinValue) { result, reason in
             pairing = nil
             guard let result else {
-                error = "Linking failed. Check the IP, that the code is still showing on the TV, and that the account ID matches the console's signed-in user."
+                error = Self.explain(reason)
                 return
             }
             store.psnAccountIDBase64 = accountID
@@ -127,6 +127,23 @@ struct AddConsoleView: View {
             dismiss()
         }
         if pairing == nil { error = "Couldn't start linking." }
+    }
+
+    /// Turns chiaki's registration errors into something actionable.
+    static func explain(_ reason: String?) -> String {
+        let r = (reason ?? "").lowercased()
+        if r.contains("refused the registration search") || r.contains("search") && r.contains("refused") {
+            return "The PS5 didn't answer. Keep the Link Device screen with the code open on the TV while you tap Link, and check the IP."
+        }
+        if r.contains("search") || r.contains("timed out") || r.contains("timeout") {
+            return "Couldn't reach the console at that IP. Check the address, that the iPhone is on the same Wi-Fi (not guest Wi-Fi, no VPN/Tailscale on), and Local Network access is on for EdgePlay."
+        }
+        if r.contains("pin") || r.contains("80108b09") || r.contains("regist failed") {
+            return "The console rejected the link. The 8-digit code may have expired (it changes every few minutes) or the PSN account ID doesn't match the user signed in on the PS5."
+        }
+        if r.contains("cancel") { return "Linking was cancelled." }
+        let detail = reason.map { " (\($0))" } ?? ""
+        return "Linking failed\(detail). Check the IP, that the code is still on the TV, and that the account ID matches the PS5's signed-in user."
     }
 }
 
