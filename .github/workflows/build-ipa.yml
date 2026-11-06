@@ -1,0 +1,90 @@
+# Builds an unsigned EdgePlay.ipa on GitHub's macOS machines, so you don't need a Mac.
+#
+# - Run it by hand: Actions tab > Build IPA > Run workflow. The IPA is attached to the run.
+# - Publish a release: push a tag like v1.0.0. The IPA and an AltStore/SideStore
+#   source.json are attached to a GitHub Release.
+
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          brew install cmake ninja pkg-config autoconf automake libtool xcodegen
+          python -m pip install protobuf grpcio-tools
+
+      # chiaki-ng + OpenSSL etc. take ~15 min; reuse them until the build script changes.
+      - name: Restore ChiakiCore cache
+        id: chiaki-cache
+        uses: actions/cache@v4
+        with:
+          path: Frameworks
+          key: chiakicore-${{ runner.os }}-${{ hashFiles('scripts/build-chiaki-ios.sh') }}
+
+      - name: Build ChiakiCore.xcframework
+        if: steps.chiaki-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-chiaki-ios.sh
+
+      - name: Work out version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build unsigned IPA
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          BUILD: ${{ github.run_number }}
+        run: ./scripts/build-ipa.sh
+
+      - name: Upload IPA to this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdgePlay-${{ steps.ver.outputs.version }}
+          path: build/EdgePlay.ipa
+
+      - name: Make AltStore/SideStore source
+        if: steps.ver.outputs.tag != ''
+        run: |
+          python scripts/make-source.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "${{ steps.ver.outputs.tag }}" \
+            --ipa build/EdgePlay.ipa \
+            --branch "${{ github.event.repository.default_branch }}" \
+            --out build/source.json
+
+      - name: Publish release
+        if: steps.ver.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/EdgePlay.ipa
+            build/source.json
+          body: |
+            Unsigned build for sideloading.
+
+            **Install:** open this release on your iPhone and download `EdgePlay.ipa`, then install it with SideStore, AltStore or Sideloadly.
+            **Auto-updates:** add this source in AltStore/SideStore:
+            `https://github.com/${{ github.repository }}/releases/latest/download/source.json`

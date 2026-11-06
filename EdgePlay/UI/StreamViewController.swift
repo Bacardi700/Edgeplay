@@ -1,0 +1,454 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+import UIKit
+import AVFoundation
+
+/// The full-screen player. Plain UIKit so it fully controls the status bar,
+/// home indicator, edge gestures and orientation.
+final class StreamViewController: UIViewController {
+    private let session: StreamSession
+    private var settings: StreamSettings
+    private let saveSettings: (StreamSettings) -> Void
+
+    private let input = ControllerInput()
+    private let videoContainer = UIView()
+    private let statsLabel = PaddedLabel()
+    private let statusLabel = UILabel()
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private let menuButton = UIButton(type: .system)
+    private let hintLabel = PaddedLabel()
+    private lazy var panel = StreamMenuPanel()
+    private var statsTimer: Timer?
+    private var hideMenuButtonWork: DispatchWorkItem?
+    private var connected = false
+    private var ending = false
+    private var pinchStartBalance: Double = 0
+
+    init(session: StreamSession, settings: StreamSettings, saveSettings: @escaping (StreamSettings) -> Void) {
+        self.session = session
+        self.settings = settings
+        self.saveSettings = saveSettings
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .fullScreen
+        modalTransitionStyle = .crossDissolve
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: system chrome
+
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    /// First swipe from an edge is delivered to us; iOS only acts on a second swipe.
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .landscapeRight }
+
+    // MARK: lifecycle
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        videoContainer.clipsToBounds = true
+        videoContainer.backgroundColor = .black
+        videoContainer.frame = view.bounds
+        videoContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(videoContainer)
+        videoContainer.layer.addSublayer(session.video.layer)
+
+        setupOverlays()
+        setupGestures()
+        wireSession()
+        wireInput()
+
+        do {
+            try session.start()
+        } catch {
+            end(message: error.localizedDescription)
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        UIApplication.shared.isIdleTimerDisabled = true
+        if #available(iOS 16.0, *) {
+            setNeedsUpdateOfSupportedInterfaceOrientations()
+            view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
+        }
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+        flashMenuButton()
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateStats() }
+        NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
+                                               name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        UIApplication.shared.isIdleTimerDisabled = false
+        statsTimer?.invalidate()
+        input.stop()
+        session.close()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutVideo()
+    }
+
+    private func layoutVideo() {
+        let dims = session.dimensions
+        let aspect: CGFloat = dims.map { CGFloat($0.width) / CGFloat(max($0.height, 1)) } ?? 16.0 / 9.0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        session.video.layer.frame = ScreenGeometry.videoFrame(in: videoContainer.bounds, videoAspect: aspect,
+                                                              mode: settings.screenMode, balance: settings.fillBalance)
+        CATransaction.commit()
+    }
+
+    @objc private func appBecameActive() {
+        // The display layer fails while backgrounded; get a fresh keyframe.
+        session.video.reset()
+        session.requestKeyframe()
+    }
+
+    // MARK: session & input
+
+    private func wireSession() {
+        session.onDimensions = { [weak self] _ in self?.layoutVideo() }
+        session.onEvent = { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .connected:
+                connected = true
+                spinner.stopAnimating()
+                statusLabel.isHidden = true
+                updateHint()
+            case .pinRequested(let wrong):
+                askForPin(wrong: wrong)
+            case .nickname:
+                break
+            case .rumble(let l, let r):
+                if settings.rumble { input.rumble(left: l, right: r) }
+            case .lightbar(let r, let g, let b):
+                if settings.lightbar { input.setLightbar(red: r, green: g, blue: b) }
+            case .ended(let reason, let isError):
+                end(message: isError ? reason : nil)
+            }
+        }
+    }
+
+    private func wireInput() {
+        input.onPad = { [weak self] pad in self?.session.sendPad(&pad) }
+        input.onControllersChanged = { [weak self] _ in self?.updateHint() }
+        input.onMenuRequested = { [weak self] in self?.toggleMenu() }
+        input.start()
+    }
+
+    private func end(message: String?) {
+        guard !ending else { return }
+        ending = true
+        if let message {
+            let alert = UIAlertController(title: "Stream ended", message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in self?.dismiss(animated: true) })
+            if let shown = presentedViewController {
+                shown.dismiss(animated: false) { [weak self] in self?.present(alert, animated: true) }
+            } else {
+                present(alert, animated: true)
+            }
+        } else {
+            dismiss(animated: true)
+        }
+    }
+
+    private func askForPin(wrong: Bool) {
+        let alert = UIAlertController(title: "Console PIN",
+                                      message: wrong ? "That PIN was wrong. Try again." : "Enter the Remote Play login PIN set on your console.",
+                                      preferredStyle: .alert)
+        alert.addTextField { $0.keyboardType = .numberPad; $0.isSecureTextEntry = true }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.end(message: nil) })
+        alert.addAction(UIAlertAction(title: "Connect", style: .default) { [weak self, weak alert] _ in
+            self?.session.submitPin(alert?.textFields?.first?.text ?? "")
+        })
+        present(alert, animated: true)
+    }
+
+    // MARK: overlays
+
+    private func setupOverlays() {
+        let guide = view.safeAreaLayoutGuide
+
+        statsLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        statsLabel.textColor = .white
+        statsLabel.numberOfLines = 0
+        statsLabel.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        statsLabel.layer.cornerRadius = 6
+        statsLabel.clipsToBounds = true
+        statsLabel.isHidden = !settings.showStats
+        statsLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statsLabel)
+
+        statusLabel.text = "Connecting to \(session.console.name)…"
+        statusLabel.textColor = .white
+        statusLabel.font = .preferredFont(forTextStyle: .headline)
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statusLabel)
+
+        spinner.color = .white
+        spinner.startAnimating()
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(spinner)
+
+        hintLabel.text = "No controller connected. Pair a DualSense in Settings › Bluetooth."
+        hintLabel.font = .preferredFont(forTextStyle: .footnote)
+        hintLabel.textColor = .white
+        hintLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        hintLabel.layer.cornerRadius = 8
+        hintLabel.clipsToBounds = true
+        hintLabel.isHidden = true
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hintLabel)
+
+        var config = UIButton.Configuration.filled()
+        config.image = UIImage(systemName: "ellipsis")
+        config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.5)
+        config.baseForegroundColor = .white
+        config.cornerStyle = .capsule
+        menuButton.configuration = config
+        menuButton.addTarget(self, action: #selector(toggleMenu), for: .touchUpInside)
+        menuButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(menuButton)
+
+        NSLayoutConstraint.activate([
+            statsLabel.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 8),
+            statsLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 16),
+            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -16),
+            hintLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            hintLabel.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -12),
+            menuButton.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -8),
+            menuButton.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+            menuButton.widthAnchor.constraint(equalToConstant: 40),
+            menuButton.heightAnchor.constraint(equalToConstant: 40),
+        ])
+    }
+
+    private func updateHint() {
+        hintLabel.isHidden = !connected || input.hasController
+    }
+
+    private func updateStats() {
+        let s = session.sampleStats()
+        guard settings.showStats, connected else { return }
+        let res = s.resolution.map { "\($0.height)p" } ?? settings.resolution.rawValue
+        let codec = (session.console.ps5 && settings.codec == .hevc) ? "HEVC" : "H.264"
+        statsLabel.text = String(format: "%@ · %@ · %.0f fps\n%.1f Mb/s · RTT %.0f ms\nloss %.1f%% · dropped %d",
+                                 res, codec, s.fps, s.receivedMbps, s.rttMs, s.packetLoss * 100, s.framesLost)
+    }
+
+    // MARK: gestures & menu
+
+    private func setupGestures() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(flashMenuButton))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        view.addGestureRecognizer(pinch)
+    }
+
+    /// Pinch out = more crop, pinch in = more stretch (only in Fill mode).
+    @objc private func pinched(_ g: UIPinchGestureRecognizer) {
+        switch g.state {
+        case .began:
+            if settings.screenMode == .fit { settings.screenMode = .fill }
+            pinchStartBalance = settings.fillBalance
+        case .changed:
+            settings.fillBalance = min(1, max(0, pinchStartBalance + Double(g.scale - 1) * 1.5))
+            panel.sync(settings)
+            layoutVideo()
+        case .ended, .cancelled:
+            saveSettings(settings)
+        default: break
+        }
+    }
+
+    @objc private func flashMenuButton() {
+        hideMenuButtonWork?.cancel()
+        UIView.animate(withDuration: 0.2) { self.menuButton.alpha = 1 }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.panel.superview == nil else { return }
+            UIView.animate(withDuration: 0.4) { self.menuButton.alpha = 0 }
+        }
+        hideMenuButtonWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+    }
+
+    @objc private func toggleMenu() {
+        if panel.superview != nil {
+            panel.removeFromSuperview()
+            flashMenuButton()
+            return
+        }
+        panel.sync(settings)
+        panel.onChange = { [weak self] new in
+            guard let self else { return }
+            settings = new
+            statsLabel.isHidden = !new.showStats
+            layoutVideo()
+            saveSettings(new)
+        }
+        panel.onRest = { [weak self] in
+            self?.session.putConsoleToRest()
+        }
+        panel.onDisconnect = { [weak self] in self?.end(message: nil) }
+        panel.onClose = { [weak self] in self?.toggleMenu() }
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(panel)
+        NSLayoutConstraint.activate([
+            panel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            panel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            panel.widthAnchor.constraint(equalToConstant: 340),
+        ])
+        menuButton.alpha = 1
+    }
+}
+
+/// In-stream settings panel: screen mode, crop/stretch balance, stats, rest, disconnect.
+final class StreamMenuPanel: UIVisualEffectView {
+    var onChange: ((StreamSettings) -> Void)?
+    var onRest: (() -> Void)?
+    var onDisconnect: (() -> Void)?
+    var onClose: (() -> Void)?
+
+    private var settings = StreamSettings()
+    private let mode = UISegmentedControl(items: ScreenMode.allCases.map(\.rawValue))
+    private let balance = UISlider()
+    private let balanceRow = UIStackView()
+    private let stats = UISwitch()
+
+    init() {
+        super.init(effect: UIBlurEffect(style: .systemMaterialDark))
+        layer.cornerRadius = 16
+        clipsToBounds = true
+
+        let title = UILabel()
+        title.text = "Screen"
+        title.font = .preferredFont(forTextStyle: .headline)
+        title.textColor = .white
+
+        mode.addTarget(self, action: #selector(changed), for: .valueChanged)
+
+        let stretch = UILabel(); stretch.text = "Stretch"
+        let crop = UILabel(); crop.text = "Crop"
+        [stretch, crop].forEach { $0.font = .preferredFont(forTextStyle: .caption1); $0.textColor = .secondaryLabel }
+        balance.minimumValue = 0
+        balance.maximumValue = 1
+        balance.addTarget(self, action: #selector(changed), for: .valueChanged)
+        balanceRow.axis = .horizontal
+        balanceRow.spacing = 8
+        [stretch, balance, crop].forEach(balanceRow.addArrangedSubview)
+
+        let statsLabel = UILabel()
+        statsLabel.text = "Show stream stats"
+        statsLabel.textColor = .white
+        stats.addTarget(self, action: #selector(changed), for: .valueChanged)
+        let statsRow = UIStackView(arrangedSubviews: [statsLabel, stats])
+
+        let tip = UILabel()
+        tip.text = "Tip: pinch the picture to adjust crop vs stretch. Hold the PS button for this menu."
+        tip.font = .preferredFont(forTextStyle: .caption2)
+        tip.textColor = .secondaryLabel
+        tip.numberOfLines = 0
+
+        func button(_ title: String, _ role: UIButton.Configuration, _ action: Selector) -> UIButton {
+            var c = role
+            c.title = title
+            let b = UIButton(configuration: c)
+            b.addTarget(self, action: action, for: .touchUpInside)
+            return b
+        }
+        var destructive = UIButton.Configuration.tinted()
+        destructive.baseForegroundColor = .systemRed
+        destructive.baseBackgroundColor = .systemRed
+        let buttons = UIStackView(arrangedSubviews: [
+            button("Rest mode", .tinted(), #selector(rest)),
+            button("Disconnect", destructive, #selector(disconnect)),
+            button("Done", .filled(), #selector(close)),
+        ])
+        buttons.distribution = .fillEqually
+        buttons.spacing = 8
+
+        let stack = UIStackView(arrangedSubviews: [title, mode, balanceRow, statsRow, tip, buttons])
+        stack.axis = .vertical
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func sync(_ s: StreamSettings) {
+        settings = s
+        mode.selectedSegmentIndex = ScreenMode.allCases.firstIndex(of: s.screenMode) ?? 1
+        balance.value = Float(s.fillBalance)
+        balanceRow.alpha = s.screenMode == .fill ? 1 : 0.35
+        balance.isEnabled = s.screenMode == .fill
+        stats.isOn = s.showStats
+    }
+
+    @objc private func changed() {
+        settings.screenMode = ScreenMode.allCases[max(0, mode.selectedSegmentIndex)]
+        settings.fillBalance = Double(balance.value)
+        settings.showStats = stats.isOn
+        sync(settings)
+        onChange?(settings)
+    }
+
+    @objc private func rest() { onRest?() }
+    @objc private func disconnect() { onDisconnect?() }
+    @objc private func close() { onClose?() }
+}
+
+final class PaddedLabel: UILabel {
+    var insets = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: insets)) }
+    override var intrinsicContentSize: CGSize {
+        let s = super.intrinsicContentSize
+        return CGSize(width: s.width + insets.left + insets.right, height: s.height + insets.top + insets.bottom)
+    }
+}
+
+/// Presents the player on top of the SwiftUI hierarchy.
+enum StreamPresenter {
+    @MainActor
+    static func present(console: Console, host: String, store: ConsoleStore) {
+        guard let root = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?.rootViewController else { return }
+        var top = root
+        while let p = top.presentedViewController { top = p }
+
+        do {
+            let session = try StreamSession(console: console, host: host, settings: store.settings)
+            let vc = StreamViewController(session: session, settings: store.settings) { new in
+                Task { @MainActor in store.settings = new }
+            }
+            top.present(vc, animated: true)
+        } catch {
+            let alert = UIAlertController(title: "Can't start", message: error.localizedDescription, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            top.present(alert, animated: true)
+        }
+    }
+}

@@ -1,0 +1,8 @@
+.build/
+Frameworks/
+EdgePlay.xcodeproj/
+EdgePlay/Info.plist
+xcuserdata/
+DerivedData/
+.DS_Store
+build/

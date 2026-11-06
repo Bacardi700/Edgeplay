@@ -1,0 +1,74 @@
+# Generate the Xcode project with:  xcodegen generate
+name: EdgePlay
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  EdgePlay:
+    type: application
+    platform: iOS
+    scheme: {}          # shared scheme, needed for command-line / CI builds
+    sources:
+      - path: EdgePlay
+    dependencies:
+      - framework: Frameworks/ChiakiCore.xcframework
+        embed: false
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: GameController.framework
+      - sdk: CoreHaptics.framework
+      - sdk: WebKit.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: CoreFoundation.framework
+      - sdk: libresolv.tbd
+    settings:
+      base:
+        # Sideloading tools (AltStore, SideStore, Sideloadly) re-sign with your Apple ID
+        # and adjust the bundle id, so these can stay as they are for IPA builds.
+        # Only set DEVELOPMENT_TEAM if you run it straight from Xcode.
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.edgeplay
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OBJC_BRIDGING_HEADER: EdgePlay/Bridge/EdgePlay-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(PROJECT_DIR)/Frameworks/include
+        GCC_C_LANGUAGE_STANDARD: gnu11
+        ENABLE_BITCODE: NO
+        DEAD_CODE_STRIPPING: YES
+        OTHER_LDFLAGS: $(inherited) -ObjC
+    info:
+      path: EdgePlay/Info.plist
+      properties:
+        CFBundleDisplayName: EdgePlay
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: false
+        UIViewControllerBasedStatusBarAppearance: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: EdgePlay talks to your PlayStation on your network to check it's on, wake it and stream from it.
+        GCSupportsControllerUserInteraction: true
+        GCSupportedGameControllers:
+          - ProfileName: ExtendedGamepad
+        UIApplicationSupportsIndirectInputEvents: true
+        ITSAppUsesNonExemptEncryption: false
